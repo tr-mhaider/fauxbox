@@ -13,6 +13,32 @@ type Account struct {
 	Plan string
 }
 
+// AccountLimits are the aggregate caps applied across an account's sandboxes.
+type AccountLimits struct {
+	ID              string
+	MaxMessages     int64
+	MaxStorageBytes int64
+}
+
+// GetAllAccountLimits returns every account's aggregate limits (for the prune cron).
+func GetAllAccountLimits() ([]AccountLimits, error) {
+	rows, err := db.Query(`SELECT ID, MaxMessages, MaxStorageBytes FROM ` + tenant("accounts"))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := []AccountLimits{}
+	for rows.Next() {
+		var a AccountLimits
+		if err := rows.Scan(&a.ID, &a.MaxMessages, &a.MaxStorageBytes); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // User is a member of an account who can sign in to the dashboard.
 type User struct {
 	ID           string

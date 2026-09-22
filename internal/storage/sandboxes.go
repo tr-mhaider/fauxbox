@@ -50,6 +50,25 @@ func GetSandboxBySMTPUsername(username string) (*Sandbox, error) {
 	return scanSandbox(db.QueryRow(`SELECT `+sandboxCols+` FROM `+tenant("sandboxes")+` WHERE SMTPUsername = $1`, username))
 }
 
+// GetAllSandboxes returns every sandbox with its limits (for the prune cron).
+func GetAllSandboxes() ([]Sandbox, error) {
+	rows, err := db.Query(`SELECT ` + sandboxCols + ` FROM ` + tenant("sandboxes"))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := []Sandbox{}
+	for rows.Next() {
+		s, err := scanSandbox(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *s)
+	}
+	return out, rows.Err()
+}
+
 // SetSandboxSMTP sets a sandbox's SMTP username and (already-hashed) password.
 func SetSandboxSMTP(id, username, passwordHash string) error {
 	_, err := db.Exec(`UPDATE `+tenant("sandboxes")+` SET SMTPUsername = $1, SMTPPasswordHash = $2 WHERE ID = $3`, username, passwordHash, id)

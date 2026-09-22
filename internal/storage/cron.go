@@ -51,6 +51,11 @@ func dbCron() {
 // PruneMessages will auto-delete the oldest messages if messages > config.MaxMessages.
 // Set config.MaxMessages to 0 to disable.
 func pruneMessages() {
+	if config.MultiTenant {
+		pruneTenants()
+		return
+	}
+
 	if config.MaxMessages < 1 && config.MaxAgeInHours == 0 {
 		return
 	}
@@ -175,6 +180,41 @@ func pruneMessages() {
 	}
 
 	websockets.Broadcast("prune", nil)
+}
+
+// pruneTenants enforces per-sandbox and per-account limits (multi-tenant mode).
+func pruneTenants() {
+	sandboxes, err := GetAllSandboxes()
+	if err != nil {
+		logger.Log().Errorf("[db] %s", err.Error())
+		return
+	}
+	for _, sb := range sandboxes {
+		if sb.MaxMessages > 0 || sb.RetentionHours > 0 {
+			if n, err := PruneSandbox(sb.ID, sb.MaxMessages, sb.RetentionHours); err != nil {
+				logger.Log().Errorf("[db] prune sandbox %s: %s", sb.ID, err.Error())
+			} else if n > 0 {
+				logger.Log().Debugf("[db] pruned %d messages from sandbox %s", n, sb.ID)
+			}
+		}
+	}
+
+	accounts, err := GetAllAccountLimits()
+	if err != nil {
+		logger.Log().Errorf("[db] %s", err.Error())
+		return
+	}
+	for _, a := range accounts {
+		if a.MaxMessages > 0 || a.MaxStorageBytes > 0 {
+			if n, err := PruneAccount(a.ID, a.MaxMessages, a.MaxStorageBytes); err != nil {
+				logger.Log().Errorf("[db] prune account %s: %s", a.ID, err.Error())
+			} else if n > 0 {
+				logger.Log().Debugf("[db] pruned %d messages from account %s", n, a.ID)
+			}
+		}
+	}
+
+	dbLastAction = time.Now()
 }
 
 // vacuumDb resets the deleted-size accounting. PostgreSQL reclaims space from

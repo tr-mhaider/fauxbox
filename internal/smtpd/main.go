@@ -45,6 +45,9 @@ func mailHandler(origin net.Addr, from string, to []string, data []byte, smtpUse
 		if err := validateRecipientsForSandbox(to, sb.Subdomain); err != nil {
 			return "", err
 		}
+		if sb.MaxMessageSize > 0 && int64(len(data)) > sb.MaxMessageSize {
+			return "", errors.New("552 message exceeds sandbox size limit")
+		}
 		ctx = storage.WithSandbox(ctx, sb.ID)
 	}
 
