@@ -12,6 +12,7 @@ import (
 
 	"github.com/axllent/mailpit/config"
 	"github.com/axllent/mailpit/internal/auth"
+	"github.com/axllent/mailpit/internal/identity"
 	"github.com/axllent/mailpit/internal/logger"
 	"github.com/axllent/mailpit/internal/shortuuid"
 	"github.com/axllent/mailpit/internal/stats"
@@ -31,11 +32,47 @@ var (
 
 // MailHandler handles the incoming message to store in the database
 func mailHandler(origin net.Addr, from string, to []string, data []byte, smtpUser *string) (string, error) {
-	return SaveToDatabase(origin, from, to, data, smtpUser)
+	ctx := context.Background()
+
+	if config.MultiTenant {
+		if smtpUser == nil || *smtpUser == "" {
+			return "", errors.New("550 authentication required")
+		}
+		sb, err := storage.GetSandboxBySMTPUsername(*smtpUser)
+		if err != nil {
+			return "", errors.New("550 unknown sandbox credentials")
+		}
+		if err := validateRecipientsForSandbox(to, sb.Subdomain); err != nil {
+			return "", err
+		}
+		ctx = storage.WithSandbox(ctx, sb.ID)
+	}
+
+	return SaveToDatabase(ctx, origin, from, to, data, smtpUser)
+}
+
+// validateRecipientsForSandbox ensures every recipient's domain subdomain matches
+// the authenticated sandbox, rejecting cross-tenant recipients.
+func validateRecipientsForSandbox(to []string, subdomain string) error {
+	for _, addr := range to {
+		at := strings.LastIndex(addr, "@")
+		if at < 0 {
+			continue
+		}
+		domain := addr[at+1:]
+		label := domain
+		if i := strings.Index(domain, "."); i > 0 {
+			label = domain[:i]
+		}
+		if !strings.EqualFold(label, subdomain) {
+			return errors.New("550 recipient not in this sandbox")
+		}
+	}
+	return nil
 }
 
 // SaveToDatabase will attempt to save a message to the database
-func SaveToDatabase(origin net.Addr, from string, to []string, data []byte, smtpUser *string) (string, error) {
+func SaveToDatabase(ctx context.Context, origin net.Addr, from string, to []string, data []byte, smtpUser *string) (string, error) {
 	if !config.SMTPStrictRFCHeaders && bytes.Contains(data, []byte("\r\r\n")) {
 		// replace all <CR><CR><LF> (\r\r\n) with <CR><LF> (\r\n)
 		// @see https://github.com/axllent/mailpit/issues/87 & https://github.com/axllent/mailpit/issues/153
@@ -138,8 +175,7 @@ func SaveToDatabase(origin net.Addr, from string, to []string, data []byte, smtp
 		logger.Log().Debugf("[smtpd] added missing addresses to Bcc header: %s", strings.Join(missingAddresses, ", "))
 	}
 
-	// TODO(phase4): derive the sandbox from SMTP credentials and use WithSandbox.
-	id, err := storage.Store(context.Background(), &data, smtpUser)
+	id, err := storage.Store(ctx, &data, smtpUser)
 	if err != nil {
 		logger.Log().Errorf("[db] error storing message: %s", err.Error())
 		return "", err
@@ -159,6 +195,25 @@ func authHandler(remoteAddr net.Addr, mechanism string, username []byte, passwor
 	allow := auth.SMTPCredentials.Match(string(username), string(password))
 	if allow {
 		logger.Log().Debugf("[smtpd] allow %s login:%q from:%s", mechanism, string(username), cleanIP(remoteAddr))
+	} else {
+		logger.Log().Warnf("[smtpd] deny %s login:%q from:%s", mechanism, string(username), cleanIP(remoteAddr))
+	}
+
+	return allow, nil
+}
+
+// mtAuthHandler authenticates an SMTP connection against a sandbox's per-sandbox
+// SMTP credentials (multi-tenant mode).
+func mtAuthHandler(remoteAddr net.Addr, mechanism string, username []byte, password []byte, _ []byte) (bool, error) {
+	hash, err := storage.SandboxSMTPPasswordHash(string(username))
+	if err != nil || hash == "" {
+		logger.Log().Warnf("[smtpd] deny %s login:%q from:%s (unknown sandbox)", mechanism, string(username), cleanIP(remoteAddr))
+		return false, nil
+	}
+
+	allow := identity.CheckPassword(hash, string(password))
+	if allow {
+		logger.Log().Debugf("[smtpd] allow %s sandbox login:%q from:%s", mechanism, string(username), cleanIP(remoteAddr))
 	} else {
 		logger.Log().Warnf("[smtpd] deny %s login:%q from:%s", mechanism, string(username), cleanIP(remoteAddr))
 	}
@@ -280,6 +335,17 @@ func listenAndServe(addr string, handler MsgIDHandler, authHandler AuthHandler) 
 			"LOGIN":    true,
 		}
 		srv.AuthHandler = authHandlerAny
+	}
+
+	// Multi-tenant mode: require and authenticate against per-sandbox SMTP credentials.
+	if config.MultiTenant {
+		srv.AuthMechs = map[string]bool{
+			"CRAM-MD5": false,
+			"PLAIN":    true,
+			"LOGIN":    true,
+		}
+		srv.AuthHandler = mtAuthHandler
+		srv.AuthRequired = true
 	}
 
 	if config.SMTPTLSCert != "" {

@@ -49,3 +49,17 @@ func GetSandboxBySubdomain(subdomain string) (*Sandbox, error) {
 func GetSandboxBySMTPUsername(username string) (*Sandbox, error) {
 	return scanSandbox(db.QueryRow(`SELECT `+sandboxCols+` FROM `+tenant("sandboxes")+` WHERE SMTPUsername = $1`, username))
 }
+
+// SetSandboxSMTP sets a sandbox's SMTP username and (already-hashed) password.
+func SetSandboxSMTP(id, username, passwordHash string) error {
+	_, err := db.Exec(`UPDATE `+tenant("sandboxes")+` SET SMTPUsername = $1, SMTPPasswordHash = $2 WHERE ID = $3`, username, passwordHash, id)
+	return err
+}
+
+// SandboxSMTPPasswordHash returns the stored bcrypt hash for an SMTP username,
+// used to authenticate inbound SMTP connections.
+func SandboxSMTPPasswordHash(username string) (string, error) {
+	var h string
+	err := db.QueryRow(`SELECT COALESCE(SMTPPasswordHash, '') FROM `+tenant("sandboxes")+` WHERE SMTPUsername = $1`, username).Scan(&h)
+	return h, err
+}
