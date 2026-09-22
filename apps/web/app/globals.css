@@ -1,13 +1,304 @@
+@import "tailwindcss";
+
+/* ============================================================================
+   Fauxbox — Signal Room design tokens
+   Dark is the default; light is opt-in via [data-theme="light"] with a
+   prefers-color-scheme fallback for first paint. See DESIGN.md.
+   ========================================================================== */
+
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
+
+  /* surfaces — the scope screen */
+  --bg: #0b0f14;
+  --surface: #111722;
+  --surface-2: #161e2b;
+  --elevated: #1b2432;
+  --border: #232e3d;
+  --border-strong: #2e3a4c;
+
+  /* text */
+  --fg: #e6edf5;
+  --muted: #94a3b4;
+  --faint: #8593a6; /* >=4.5:1 on every surface it labels; see DESIGN.md */
+
+  /* accent — signal */
+  --accent: #3e8eff;
+  --accent-hover: #5b9fff;
+  --accent-fg: #08111c;
+  --accent-weak: rgba(62, 142, 255, 0.14);
+
+  /* status — functional coding */
+  --ok: #35c88a;
+  --warn: #e5a33b;
+  --error: #f0616d;
+  --error-fg: #0a0f14; /* dark text: error fill is light in this theme */
+  --pending: #a78bfa;
+  --capture: #34d3e0;
+
+  /* type scale (px) */
+  --t-2xs: 0.6875rem;
+  --t-xs: 0.75rem;
+  --t-sm: 0.8125rem;
+  --t-base: 0.875rem;
+  --t-md: 0.9375rem;
+  --t-lg: 1.0625rem;
+  --t-xl: 1.25rem;
+  --t-2xl: 1.5625rem;
+  --t-3xl: 2rem;
+  --t-4xl: 2.625rem;
+
+  /* radius */
+  --r-xs: 3px;
+  --r-sm: 5px;
+  --r-md: 7px;
+  --r-lg: 10px;
+  --r-full: 999px;
+
+  /* depth — offset + blur, never a flat halo */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-2: 0 8px 24px -6px rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 20px 48px -12px rgba(0, 0, 0, 0.55);
+
+  /* motion */
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-snap: cubic-bezier(0.3, 0.7, 0.2, 1);
 }
+
+/* Light — daylight scope. Applied by the theme toggle and as first-paint
+   fallback when the OS prefers light and no explicit choice is stored. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg: #f6f8fa;
+    --surface: #ffffff;
+    --surface-2: #f0f3f6;
+    --elevated: #ffffff;
+    --border: #e2e8f0;
+    --border-strong: #cbd5e1;
+    --fg: #0f1826;
+    --muted: #526072;
+    --faint: #5a6675;
+    --accent: #1f6feb;
+    --accent-hover: #1a5fd0;
+    --accent-fg: #ffffff;
+    --accent-weak: rgba(31, 111, 235, 0.1);
+    --ok: #17935f;
+    --warn: #b26a00;
+    --error: #d33a48;
+    --error-fg: #ffffff;
+    --pending: #7c5cd6;
+    --capture: #0e8fa0;
+    --shadow-1: 0 1px 2px rgba(15, 24, 38, 0.08);
+    --shadow-2: 0 8px 24px -6px rgba(15, 24, 38, 0.12);
+    --shadow-3: 0 20px 48px -12px rgba(15, 24, 38, 0.16);
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f8fa;
+  --surface: #ffffff;
+  --surface-2: #f0f3f6;
+  --elevated: #ffffff;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --fg: #0f1826;
+  --muted: #526072;
+  --faint: #5a6675;
+  --accent: #1f6feb;
+  --accent-hover: #1a5fd0;
+  --accent-fg: #ffffff;
+  --accent-weak: rgba(31, 111, 235, 0.1);
+  --ok: #17935f;
+  --warn: #b26a00;
+  --error: #d33a48;
+  --error-fg: #ffffff;
+  --pending: #7c5cd6;
+  --capture: #0e8fa0;
+  --shadow-1: 0 1px 2px rgba(15, 24, 38, 0.08);
+  --shadow-2: 0 8px 24px -6px rgba(15, 24, 38, 0.12);
+  --shadow-3: 0 20px 48px -12px rgba(15, 24, 38, 0.16);
+}
+
+/* Map tokens to Tailwind utilities. `inline` keeps the var reference so
+   utilities re-resolve when the theme switches. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-elevated: var(--elevated);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-weak: var(--accent-weak);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-error: var(--error);
+  --color-error-fg: var(--error-fg);
+  --color-pending: var(--pending);
+  --color-capture: var(--capture);
+
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, "SF Mono", monospace;
+
+  --text-2xs: var(--t-2xs);
+  --text-xs: var(--t-xs);
+  --text-sm: var(--t-sm);
+  --text-base: var(--t-base);
+  --text-md: var(--t-md);
+  --text-lg: var(--t-lg);
+  --text-xl: var(--t-xl);
+  --text-2xl: var(--t-2xl);
+  --text-3xl: var(--t-3xl);
+  --text-4xl: var(--t-4xl);
+
+  --radius-xs: var(--r-xs);
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+
+  --shadow-e1: var(--shadow-1);
+  --shadow-e2: var(--shadow-2);
+  --shadow-e3: var(--shadow-3);
+
+  --ease-out: var(--ease-out);
+  --ease-snap: var(--ease-snap);
+
+  --animate-capture-in: capture-in 0.24s var(--ease-out);
+  --animate-pulse-dot: pulse-dot 2s var(--ease-out) infinite;
+}
+
+@keyframes capture-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    box-shadow: inset 2px 0 0 transparent;
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 var(--capture);
+  }
+  50% {
+    opacity: 0.55;
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* ============================================================================
+   Base
+   ========================================================================== */
 
 * {
   box-sizing: border-box;
+  border-color: var(--border);
 }
 
-html,
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
-  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: var(--t-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Browser surfaces themed from the palette — the cheap tell of a real system */
+::selection {
+  background: var(--accent-weak);
+  color: var(--fg);
+}
+
+::placeholder {
+  color: var(--faint);
+}
+
+input,
+textarea,
+select {
+  caret-color: var(--accent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-xs);
+}
+
+/* Tabular numerals for aligned machine data */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 2px solid var(--bg);
+  border-radius: var(--r-full);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--faint);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
