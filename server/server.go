@@ -224,6 +224,11 @@ func apiRoutes() *http.ServeMux {
 	r.HandleFunc("GET "+config.Webroot+"api/v1/search", middleWareFunc(apiv1.Search))
 	r.HandleFunc("DELETE "+config.Webroot+"api/v1/search", middleWareFunc(apiv1.DeleteSearch))
 	r.HandleFunc("POST "+config.Webroot+"api/v1/send", sendAPIAuthMiddleware(apiv1.SendMessageHandler))
+
+	// Auth (Phase 3): dashboard authentication
+	r.HandleFunc("POST "+config.Webroot+"api/v1/auth/login", middleWareFunc(apiv1.Login))
+	r.HandleFunc("POST "+config.Webroot+"api/v1/auth/refresh", middleWareFunc(apiv1.Refresh))
+	r.HandleFunc("POST "+config.Webroot+"api/v1/auth/logout", middleWareFunc(apiv1.Logout))
 	r.HandleFunc("GET "+config.Webroot+"api/v1/tags", middleWareFunc(apiv1.GetAllTags))
 	r.HandleFunc("PUT "+config.Webroot+"api/v1/tags", middleWareFunc(apiv1.SetMessageTags))
 	r.HandleFunc("PUT "+config.Webroot+"api/v1/tags/{tag}", middleWareFunc(apiv1.RenameTag))
