@@ -23,6 +23,15 @@ func postJSON(t *testing.T, fn http.HandlerFunc, path string, body any, auth str
 	return rec
 }
 
+func cookieByName(cookies []*http.Cookie, name string) *http.Cookie {
+	for _, c := range cookies {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
+}
+
 func TestAuthFlow(t *testing.T) {
 	initTestDB(t)
 	identity.Configure("test-secret", 0, 0)
@@ -35,17 +44,24 @@ func TestAuthFlow(t *testing.T) {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
-	// login succeeds and returns tokens
+	// login sets httpOnly cookies and returns the account + CSRF token
 	rec := postJSON(t, Login, "/api/v1/auth/login", map[string]string{"email": "bob@example.com", "password": "hunter2"}, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login status %d: %s", rec.Code, rec.Body.String())
 	}
-	var tok tokenResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &tok); err != nil {
+	var lr loginResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &lr); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if tok.AccessToken == "" || tok.RefreshToken == "" || tok.AccountID != "acc-1" {
-		t.Fatalf("unexpected token response: %+v", tok)
+	if lr.CSRFToken == "" || lr.AccountID != "acc-1" {
+		t.Fatalf("unexpected login response: %+v", lr)
+	}
+	cookies := rec.Result().Cookies()
+	at := cookieByName(cookies, cookieAccess)
+	rt := cookieByName(cookies, cookieRefresh)
+	csrf := cookieByName(cookies, cookieCSRF)
+	if at == nil || rt == nil || csrf == nil {
+		t.Fatal("login did not set all auth cookies")
 	}
 
 	// wrong password is rejected
@@ -53,18 +69,41 @@ func TestAuthFlow(t *testing.T) {
 		t.Fatalf("wrong password: expected 401, got %d", rec.Code)
 	}
 
-	// refresh works
-	if rec := postJSON(t, Refresh, "/api/v1/auth/refresh", map[string]string{"refresh_token": tok.RefreshToken}, ""); rec.Code != http.StatusOK {
-		t.Fatalf("refresh status %d: %s", rec.Code, rec.Body.String())
+	// refresh via the refresh cookie
+	rreq := httptest.NewRequest("POST", "/api/v1/auth/refresh", nil)
+	rreq.AddCookie(rt)
+	rrec := httptest.NewRecorder()
+	Refresh(rrec, rreq)
+	if rrec.Code != http.StatusOK {
+		t.Fatalf("refresh status %d: %s", rrec.Code, rrec.Body.String())
 	}
 
-	// logout bumps the token version
-	if rec := postJSON(t, Logout, "/api/v1/auth/logout", nil, tok.AccessToken); rec.Code != http.StatusOK {
-		t.Fatalf("logout status %d: %s", rec.Code, rec.Body.String())
+	// logout via cookie without CSRF is rejected
+	noCSRF := httptest.NewRequest("POST", "/api/v1/auth/logout", nil)
+	noCSRF.AddCookie(at)
+	noRec := httptest.NewRecorder()
+	Logout(noRec, noCSRF)
+	if noRec.Code != http.StatusForbidden {
+		t.Fatalf("logout without CSRF: expected 403, got %d", noRec.Code)
 	}
 
-	// the old refresh token is now revoked
-	if rec := postJSON(t, Refresh, "/api/v1/auth/refresh", map[string]string{"refresh_token": tok.RefreshToken}, ""); rec.Code != http.StatusUnauthorized {
-		t.Fatalf("revoked refresh: expected 401, got %d", rec.Code)
+	// logout with CSRF succeeds
+	lreq := httptest.NewRequest("POST", "/api/v1/auth/logout", nil)
+	lreq.AddCookie(at)
+	lreq.AddCookie(csrf)
+	lreq.Header.Set(csrfHeader, csrf.Value)
+	lrec := httptest.NewRecorder()
+	Logout(lrec, lreq)
+	if lrec.Code != http.StatusOK {
+		t.Fatalf("logout status %d: %s", lrec.Code, lrec.Body.String())
+	}
+
+	// the old refresh cookie is now revoked
+	rreq2 := httptest.NewRequest("POST", "/api/v1/auth/refresh", nil)
+	rreq2.AddCookie(rt)
+	rrec2 := httptest.NewRecorder()
+	Refresh(rrec2, rreq2)
+	if rrec2.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked refresh: expected 401, got %d", rrec2.Code)
 	}
 }

@@ -384,7 +384,11 @@ func middleWareFunc(fn http.HandlerFunc) http.HandlerFunc {
 			}
 			w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, PUT, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "*")
+			// Credentialed CORS (httpOnly cookies) requires a specific origin (set
+			// above) plus an explicit header allow-list, not "*".
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-CSRF-Token, X-Sandbox-ID")
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Add("Vary", "Origin")
 		}
 
 		// Check basic authentication headers if configured.
