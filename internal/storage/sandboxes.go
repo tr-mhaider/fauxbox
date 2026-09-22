@@ -17,7 +17,7 @@ type Sandbox struct {
 	WebhookURL     string
 }
 
-const sandboxCols = `ID, AccountID, Subdomain, SMTPUsername, MaxMessages, MaxMessageSize, RetentionHours, RateLimit, WebhookURL`
+const sandboxCols = `ID, AccountID, COALESCE(Subdomain, ''), COALESCE(SMTPUsername, ''), MaxMessages, MaxMessageSize, RetentionHours, RateLimit, COALESCE(WebhookURL, '')`
 
 func scanSandbox(row interface{ Scan(...any) error }) (*Sandbox, error) {
 	s := &Sandbox{}

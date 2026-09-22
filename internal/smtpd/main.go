@@ -3,6 +3,7 @@ package smtpd
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net"
 	"net/mail"
@@ -137,7 +138,8 @@ func SaveToDatabase(origin net.Addr, from string, to []string, data []byte, smtp
 		logger.Log().Debugf("[smtpd] added missing addresses to Bcc header: %s", strings.Join(missingAddresses, ", "))
 	}
 
-	id, err := storage.Store(&data, smtpUser)
+	// TODO(phase4): derive the sandbox from SMTP credentials and use WithSandbox.
+	id, err := storage.Store(context.Background(), &data, smtpUser)
 	if err != nil {
 		logger.Log().Errorf("[db] error storing message: %s", err.Error())
 		return "", err

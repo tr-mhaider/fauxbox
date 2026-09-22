@@ -91,7 +91,7 @@ func Search(search, timezone string, start int, beforeTS int64, limit int) ([]Me
 		for i, m := range results {
 			ids[i] = m.ID
 		}
-		tagMap := getTagsForIDs(ids)
+		tagMap := getTagsForIDs(context.Background(), ids)
 		for i, m := range results {
 			if tags, ok := tagMap[m.ID]; ok {
 				results[i].Tags = tags

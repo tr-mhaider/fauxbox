@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 
+	"github.com/axllent/mailpit/config"
 	"github.com/leporo/sqlf"
 )
 
@@ -34,11 +35,17 @@ func WithBypass(ctx context.Context) context.Context {
 	return context.WithValue(ctx, sandboxKey, scope{bypass: true})
 }
 
-// scopeFromCtx returns the sandbox scope carried by ctx, defaulting to bypass
-// when none is set so pre-multi-tenant callers keep their single-tenant behavior.
+// scopeFromCtx returns the sandbox scope carried by ctx. When none is set the
+// default depends on the mode: in single-tenant mode it is bypass (unchanged
+// behavior); in multi-tenant mode it is a fail-closed empty sandbox, so any
+// storage path not yet threaded with a real sandbox returns nothing and rejects
+// writes rather than leaking across tenants.
 func scopeFromCtx(ctx context.Context) scope {
 	if s, ok := ctx.Value(sandboxKey).(scope); ok {
 		return s
+	}
+	if config.MultiTenant {
+		return scope{sandboxID: ""}
 	}
 	return scope{bypass: true}
 }

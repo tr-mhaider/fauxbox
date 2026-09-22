@@ -218,7 +218,7 @@ func apiRoutes() *http.ServeMux {
 	r := http.NewServeMux()
 
 	// API V1
-	r.HandleFunc("GET "+config.Webroot+"api/v1/messages", middleWareFunc(apiv1.GetMessages))
+	r.HandleFunc("GET "+config.Webroot+"api/v1/messages", middleWareFunc(apiv1.RequireAuth(apiv1.GetMessages)))
 	r.HandleFunc("PUT "+config.Webroot+"api/v1/messages", middleWareFunc(apiv1.SetReadStatus))
 	r.HandleFunc("DELETE "+config.Webroot+"api/v1/messages", middleWareFunc(apiv1.DeleteMessages))
 	r.HandleFunc("GET "+config.Webroot+"api/v1/search", middleWareFunc(apiv1.Search))

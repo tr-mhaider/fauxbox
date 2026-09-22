@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/axllent/mailpit/config"
 	"github.com/axllent/mailpit/internal/identity"
 	"github.com/axllent/mailpit/internal/storage"
 )
@@ -22,6 +23,47 @@ func httpUnauthorized(w http.ResponseWriter, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 	_ = json.NewEncoder(w).Encode(struct{ Error string }{Error: msg})
+}
+
+// httpForbidden returns a 403 JSON error.
+func httpForbidden(w http.ResponseWriter, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(struct{ Error string }{Error: msg})
+}
+
+// RequireAuth wraps a handler with sandbox authentication. In single-tenant mode
+// it is a pass-through. In multi-tenant mode it validates the bearer token,
+// resolves the sandbox from the X-Sandbox-ID header, verifies the token's account
+// owns that sandbox, and injects the sandbox into the request context so storage
+// calls made by the handler are scoped (and enforced by Row-Level Security).
+func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !config.MultiTenant {
+			next(w, r)
+			return
+		}
+
+		claims, err := bearerClaims(r)
+		if err != nil {
+			httpUnauthorized(w, "authentication required")
+			return
+		}
+
+		sandboxID := r.Header.Get("X-Sandbox-ID")
+		if sandboxID == "" {
+			httpError(w, "missing X-Sandbox-ID header")
+			return
+		}
+
+		sb, err := storage.GetSandboxByID(sandboxID)
+		if err != nil || sb.AccountID != claims.Account {
+			httpForbidden(w, "sandbox not found or not permitted")
+			return
+		}
+
+		next(w, r.WithContext(storage.WithSandbox(r.Context(), sandboxID)))
+	}
 }
 
 // Login authenticates a user by email and password and returns tokens.

@@ -1,6 +1,7 @@
 package pop3
 
 import (
+	"context"
 	"bytes"
 	"fmt"
 	"io"
@@ -339,7 +340,7 @@ func TestPOP3DotStuffing(t *testing.T) {
 	}
 
 	bufBytes := buf.Bytes()
-	_, err = storage.Store(&bufBytes, nil)
+	_, err = storage.Store(context.Background(), &bufBytes, nil)
 	if err != nil {
 		t.Fatal("error storing message:", err)
 	}
@@ -502,7 +503,7 @@ func insertEmailData(t *testing.T) {
 
 		bufBytes := buf.Bytes()
 
-		id, err := storage.Store(&bufBytes, nil)
+		id, err := storage.Store(context.Background(), &bufBytes, nil)
 		if err != nil {
 			t.Log("error ", err)
 			t.Fail()

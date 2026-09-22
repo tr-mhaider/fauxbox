@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"bytes"
 	"fmt"
 	"math/rand/v2"
@@ -48,7 +49,7 @@ func TestSearch(t *testing.T) {
 
 			bufBytes := buf.Bytes()
 
-			if _, err := Store(&bufBytes, nil); err != nil {
+			if _, err := Store(context.Background(), &bufBytes, nil); err != nil {
 				t.Log("error ", err)
 				t.Fail()
 			}
@@ -117,11 +118,11 @@ func TestSearchDelete100(t *testing.T) {
 		}
 
 		for range 100 {
-			if _, err := Store(&testTextEmail, nil); err != nil {
+			if _, err := Store(context.Background(), &testTextEmail, nil); err != nil {
 				t.Log("error ", err)
 				t.Fail()
 			}
-			if _, err := Store(&testMimeEmail, nil); err != nil {
+			if _, err := Store(context.Background(), &testMimeEmail, nil); err != nil {
 				t.Log("error ", err)
 				t.Fail()
 			}
@@ -158,7 +159,7 @@ func TestSearchDelete1100(t *testing.T) {
 
 	t.Log("Testing search delete of 1100 messages")
 	for range 1100 {
-		if _, err := Store(&testTextEmail, nil); err != nil {
+		if _, err := Store(context.Background(), &testTextEmail, nil); err != nil {
 			t.Log("error ", err)
 			t.Fail()
 		}

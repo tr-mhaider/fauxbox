@@ -356,7 +356,7 @@ func (d Metadata) tagsFromPlusAddresses() []string {
 
 // getTagsForIDs fetches tags for a set of message IDs in a single query,
 // returning a map of message ID to tag names.
-func getTagsForIDs(ids []string) map[string][]string {
+func getTagsForIDs(ctx context.Context, ids []string) map[string][]string {
 	result := make(map[string][]string, len(ids))
 	if len(ids) == 0 {
 		return result
@@ -367,21 +367,25 @@ func getTagsForIDs(ids []string) map[string][]string {
 		tenant("Tags"), tenant("message_tags"),
 	) // #nosec
 
-	rows, err := db.Query(query, ids)
-	if err != nil {
-		logger.Log().Errorf("[tags] %s", err.Error())
-		return result
-	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
-		var id, name string
-		if err := rows.Scan(&id, &name); err != nil {
+	_ = withScope(ctx, func(ex sqlf.Executor) error {
+		rows, err := ex.QueryContext(ctx, query, ids)
+		if err != nil {
 			logger.Log().Errorf("[tags] %s", err.Error())
-			return result
+			return err
 		}
-		result[id] = append(result[id], name)
-	}
+		defer func() { _ = rows.Close() }()
+
+		for rows.Next() {
+			var id, name string
+			if err := rows.Scan(&id, &name); err != nil {
+				logger.Log().Errorf("[tags] %s", err.Error())
+				return err
+			}
+			result[id] = append(result[id], name)
+		}
+
+		return nil
+	})
 
 	return result
 }

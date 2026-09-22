@@ -29,7 +29,7 @@ import (
 // Store will save an email to the database tables.
 // The username is the authentication username of either the SMTP or HTTP client (blank for none).
 // Returns the database ID of the saved message.
-func Store(body *[]byte, username *string) (string, error) {
+func Store(ctx context.Context, body *[]byte, username *string) (string, error) {
 	// Parse message body with enmime
 	env, err := envelopeParser.ReadEnvelope(bytes.NewReader(*body))
 	if err != nil {
@@ -77,17 +77,6 @@ func Store(body *[]byte, username *string) (string, error) {
 		return "", err
 	}
 
-	// begin a transaction to ensure both the message
-	// and data are stored successfully
-	ctx := context.Background()
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", err
-	}
-
-	// roll back if it fails
-	defer func() { _ = tx.Rollback() }()
-
 	subject := env.GetHeader("Subject")
 	size := uint64(len(*body))
 	inline := len(env.Inlines)
@@ -100,27 +89,25 @@ func Store(body *[]byte, username *string) (string, error) {
 		tenant("mailbox"),
 	) // #nosec
 
-	// insert mail summary data
-	_, err = tx.Exec(sql, created.UnixMilli(), id, messageID, subject, string(summaryJSON), size, inline, attachments, searchText, snippet)
-	if err != nil {
-		return "", err
-	}
+	// store the summary and raw message in a sandbox-scoped transaction
+	if err := withScope(ctx, func(ex sqlf.Executor) error {
+		if _, err := ex.ExecContext(ctx, sql, created.UnixMilli(), id, messageID, subject, string(summaryJSON), size, inline, attachments, searchText, snippet); err != nil {
+			return err
+		}
 
-	if config.Compression > 0 {
-		// insert compressed raw message
-		compressed := dbEncoder.EncodeAll(*body, make([]byte, 0, size))
+		if config.Compression > 0 {
+			compressed := dbEncoder.EncodeAll(*body, make([]byte, 0, size))
+			if _, err := ex.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s (ID, Email, Compressed) VALUES($1, $2, 1)`, tenant("mailbox_data")), id, compressed); err != nil { // #nosec
+				return err
+			}
+		} else {
+			if _, err := ex.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s (ID, Email, Compressed) VALUES($1, $2, 0)`, tenant("mailbox_data")), id, *body); err != nil { // #nosec
+				return err
+			}
+		}
 
-		_, err = tx.Exec(fmt.Sprintf(`INSERT INTO %s (ID, Email, Compressed) VALUES($1, $2, 1)`, tenant("mailbox_data")), id, compressed) // #nosec
-	} else {
-		// insert uncompressed raw message
-		_, err = tx.Exec(fmt.Sprintf(`INSERT INTO %s (ID, Email, Compressed) VALUES($1, $2, 0)`, tenant("mailbox_data")), id, *body) // #nosec
-	}
-
-	if err != nil {
-		return "", err
-	}
-
-	if err := tx.Commit(); err != nil {
+		return nil
+	}); err != nil {
 		return "", err
 	}
 
@@ -205,7 +192,7 @@ func Store(body *[]byte, username *string) (string, error) {
 
 // List returns a subset of messages from the mailbox,
 // sorted latest to oldest
-func List(start int, beforeTS int64, limit int) ([]MessageSummary, error) {
+func List(ctx context.Context, start int, beforeTS int64, limit int) ([]MessageSummary, error) {
 	results := []MessageSummary{}
 	tsStart := time.Now()
 
@@ -221,7 +208,8 @@ func List(start int, beforeTS int64, limit int) ([]MessageSummary, error) {
 		q = q.Where("Created < ?", beforeTS)
 	}
 
-	if err := q.QueryAndClose(context.TODO(), db, func(row *sql.Rows) {
+	if err := withScope(ctx, func(ex sqlf.Executor) error {
+		return q.QueryAndClose(ctx, ex, func(row *sql.Rows) {
 		var created float64 // use float64 for rqlite compatibility
 		var id string
 		var messageID string
@@ -265,7 +253,8 @@ func List(start int, beforeTS int64, limit int) ([]MessageSummary, error) {
 			em.ReplyTo = []*mail.Address{}
 		}
 
-		results = append(results, em)
+			results = append(results, em)
+		})
 	}); err != nil {
 		return results, err
 	}
@@ -276,7 +265,7 @@ func List(start int, beforeTS int64, limit int) ([]MessageSummary, error) {
 		for i, m := range results {
 			ids[i] = m.ID
 		}
-		tagMap := getTagsForIDs(ids)
+		tagMap := getTagsForIDs(ctx, ids)
 		for i, m := range results {
 			if tags, ok := tagMap[m.ID]; ok {
 				results[i].Tags = tags
@@ -512,7 +501,7 @@ func LatestID(r *http.Request) (string, error) {
 			return "", err
 		}
 	} else {
-		messages, err = List(0, 0, 1)
+		messages, err = List(r.Context(), 0, 0, 1)
 		if err != nil {
 			return "", err
 		}

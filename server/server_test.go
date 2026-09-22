@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -652,7 +653,7 @@ func TestAPIv1QuotedLocalPartStore(t *testing.T) {
 	// Store a raw message with quoted local-parts in the headers.
 	// This simulates what arrives via SMTP for addresses like "odd user"@example.com.
 	raw := []byte("From: <\"odd user\"@example.com>\r\nTo: <\"a@b\"@example.com>\r\nSubject: Quoted local-part test\r\nMIME-Version: 1.0\r\nContent-Type: text/plain\r\n\r\nTest body\r\n")
-	id, err := storage.Store(&raw, nil)
+	id, err := storage.Store(context.Background(), &raw, nil)
 	if err != nil {
 		t.Fatalf("failed to store message: %s", err)
 	}
@@ -797,7 +798,7 @@ func insertEmailData(t *testing.T) {
 
 		bufBytes := buf.Bytes()
 
-		id, err := storage.Store(&bufBytes, nil)
+		id, err := storage.Store(context.Background(), &bufBytes, nil)
 		if err != nil {
 			t.Log("error ", err)
 			t.Fail()
