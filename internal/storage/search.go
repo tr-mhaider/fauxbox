@@ -119,26 +119,23 @@ func SearchUnreadCount(search, timezone string, beforeTS int64) (int64, error) {
 		q = q.Where(`Created < ?`, beforeTS)
 	}
 
-	var unread float64 // use float64 for rqlite compatibility
+	// PostgreSQL rejects mixing COUNT(*) with the non-aggregate select list, so
+	// count the matching unread rows by iterating the filtered result instead.
+	var unread int64
 
-	q = q.Where("Read = 0").Select(`COUNT(*)`)
+	q = q.Where("Read = 0")
 
-	err := q.QueryAndClose(context.TODO(), db, func(row *sql.Rows) {
-		var ignore sql.NullString
-		if err := row.Scan(&ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &unread); err != nil {
-			logger.Log().Errorf("[db] %s", err.Error())
-			return
-		}
-
+	err := q.QueryAndClose(context.TODO(), db, func(_ *sql.Rows) {
+		unread++
 	})
 
 	dbLastAction = time.Now()
 
 	elapsed := time.Since(tsStart)
 
-	logger.Log().Debugf("[db] counted %d unread for \"%s\" in %s", int64(unread), search, elapsed)
+	logger.Log().Debugf("[db] counted %d unread for \"%s\" in %s", unread, search, elapsed)
 
-	return int64(unread), err
+	return unread, err
 }
 
 // DeleteSearch will delete all messages for search terms.
@@ -204,29 +201,15 @@ func DeleteSearch(search, timezone string) error {
 		defer func() { _ = tx.Rollback() }()
 
 		for _, ids := range chunks {
-			delIDs := make([]any, len(ids))
-			for i, id := range ids {
-				delIDs[i] = id
-			}
-
-			sqlDelete1 := `DELETE FROM ` + tenant("mailbox") + ` WHERE ID IN (?` + strings.Repeat(",?", len(ids)-1) + `)` // #nosec
-
-			_, err = tx.Exec(sqlDelete1, delIDs...)
-			if err != nil {
+			if _, err = tx.Exec(`DELETE FROM `+tenant("mailbox")+` WHERE ID = ANY($1)`, ids); err != nil {
 				return err
 			}
 
-			sqlDelete2 := `DELETE FROM ` + tenant("mailbox_data") + ` WHERE ID IN (?` + strings.Repeat(",?", len(ids)-1) + `)` // #nosec
-
-			_, err = tx.Exec(sqlDelete2, delIDs...)
-			if err != nil {
+			if _, err = tx.Exec(`DELETE FROM `+tenant("mailbox_data")+` WHERE ID = ANY($1)`, ids); err != nil {
 				return err
 			}
 
-			sqlDelete3 := `DELETE FROM ` + tenant("message_tags") + ` WHERE ID IN (?` + strings.Repeat(",?", len(ids)-1) + `)` // #nosec
-
-			_, err = tx.Exec(sqlDelete3, delIDs...)
-			if err != nil {
+			if _, err = tx.Exec(`DELETE FROM `+tenant("message_tags")+` WHERE ID = ANY($1)`, ids); err != nil {
 				return err
 			}
 		}
@@ -323,13 +306,21 @@ func searchQueryBuilder(searchString, timezone string) *sqlf.Stmt {
 	q := sqlf.From(tenant("mailbox") + " m").
 		Select(`m.Created, m.ID, m.MessageID, m.Subject, m.Metadata, m.Size, m.Attachments, m.Read,
 			m.Snippet,
-			IFNULL(json_extract(Metadata, '$.To'), '{}') as ToJSON,
-			IFNULL(json_extract(Metadata, '$.From'), '{}') as FromJSON,
-			IFNULL(json_extract(Metadata, '$.Cc'), '{}') as CcJSON,
-			IFNULL(json_extract(Metadata, '$.Bcc'), '{}') as BccJSON,
-			IFNULL(json_extract(Metadata, '$.ReplyTo'), '{}') as ReplyToJSON
+			COALESCE(m.Metadata->>'To', '{}') as ToJSON,
+			COALESCE(m.Metadata->>'From', '{}') as FromJSON,
+			COALESCE(m.Metadata->>'Cc', '{}') as CcJSON,
+			COALESCE(m.Metadata->>'Bcc', '{}') as BccJSON,
+			COALESCE(m.Metadata->>'ReplyTo', '{}') as ReplyToJSON
 		`).
 		OrderBy("m.Created DESC")
+
+	// PostgreSQL cannot reference SELECT aliases in WHERE, so these full
+	// expressions are used in the address-filter clauses below.
+	exprTo := "COALESCE(m.Metadata->>'To', '')"
+	exprFrom := "COALESCE(m.Metadata->>'From', '')"
+	exprCc := "COALESCE(m.Metadata->>'Cc', '')"
+	exprBcc := "COALESCE(m.Metadata->>'Bcc', '')"
+	exprReplyTo := "COALESCE(m.Metadata->>'ReplyTo', '')"
 
 	for _, w := range args {
 		if cleanString(w) == "" {
@@ -356,45 +347,45 @@ func searchQueryBuilder(searchString, timezone string) *sqlf.Stmt {
 			w = cleanString(w[3:])
 			if w != "" {
 				if exclude {
-					q.Where("ToJSON NOT LIKE ?", "%"+escPercentChar(w)+"%")
+					q.Where(exprTo+" NOT ILIKE ?", "%"+escPercentChar(w)+"%")
 				} else {
-					q.Where("ToJSON LIKE ?", "%"+escPercentChar(w)+"%")
+					q.Where(exprTo+" ILIKE ?", "%"+escPercentChar(w)+"%")
 				}
 			}
 		} else if strings.HasPrefix(lw, "from:") {
 			w = cleanString(w[5:])
 			if w != "" {
 				if exclude {
-					q.Where("FromJSON NOT LIKE ?", "%"+escPercentChar(w)+"%")
+					q.Where(exprFrom+" NOT ILIKE ?", "%"+escPercentChar(w)+"%")
 				} else {
-					q.Where("FromJSON LIKE ?", "%"+escPercentChar(w)+"%")
+					q.Where(exprFrom+" ILIKE ?", "%"+escPercentChar(w)+"%")
 				}
 			}
 		} else if strings.HasPrefix(lw, "cc:") {
 			w = cleanString(w[3:])
 			if w != "" {
 				if exclude {
-					q.Where("CcJSON NOT LIKE ?", "%"+escPercentChar(w)+"%")
+					q.Where(exprCc+" NOT ILIKE ?", "%"+escPercentChar(w)+"%")
 				} else {
-					q.Where("CcJSON LIKE ?", "%"+escPercentChar(w)+"%")
+					q.Where(exprCc+" ILIKE ?", "%"+escPercentChar(w)+"%")
 				}
 			}
 		} else if strings.HasPrefix(lw, "bcc:") {
 			w = cleanString(w[4:])
 			if w != "" {
 				if exclude {
-					q.Where("BccJSON NOT LIKE ?", "%"+escPercentChar(w)+"%")
+					q.Where(exprBcc+" NOT ILIKE ?", "%"+escPercentChar(w)+"%")
 				} else {
-					q.Where("BccJSON LIKE ?", "%"+escPercentChar(w)+"%")
+					q.Where(exprBcc+" ILIKE ?", "%"+escPercentChar(w)+"%")
 				}
 			}
 		} else if strings.HasPrefix(lw, "reply-to:") {
 			w = cleanString(w[9:])
 			if w != "" {
 				if exclude {
-					q.Where("ReplyToJSON NOT LIKE ?", "%"+escPercentChar(w)+"%")
+					q.Where(exprReplyTo+" NOT ILIKE ?", "%"+escPercentChar(w)+"%")
 				} else {
-					q.Where("ReplyToJSON LIKE ?", "%"+escPercentChar(w)+"%")
+					q.Where(exprReplyTo+" ILIKE ?", "%"+escPercentChar(w)+"%")
 				}
 			}
 		} else if strings.HasPrefix(lw, "addressed:") {
@@ -402,27 +393,27 @@ func searchQueryBuilder(searchString, timezone string) *sqlf.Stmt {
 			arg := "%" + escPercentChar(w) + "%"
 			if w != "" {
 				if exclude {
-					q.Where("(ToJSON NOT LIKE ? AND FromJSON NOT LIKE ? AND CcJSON NOT LIKE ? AND BccJSON NOT LIKE ? AND ReplyToJSON NOT LIKE ?)", arg, arg, arg, arg, arg)
+					q.Where("("+exprTo+" NOT ILIKE ? AND "+exprFrom+" NOT ILIKE ? AND "+exprCc+" NOT ILIKE ? AND "+exprBcc+" NOT ILIKE ? AND "+exprReplyTo+" NOT ILIKE ?)", arg, arg, arg, arg, arg)
 				} else {
-					q.Where("(ToJSON LIKE ? OR FromJSON LIKE ? OR CcJSON LIKE ? OR BccJSON LIKE ? OR ReplyToJSON LIKE ?)", arg, arg, arg, arg, arg)
+					q.Where("("+exprTo+" ILIKE ? OR "+exprFrom+" ILIKE ? OR "+exprCc+" ILIKE ? OR "+exprBcc+" ILIKE ? OR "+exprReplyTo+" ILIKE ?)", arg, arg, arg, arg, arg)
 				}
 			}
 		} else if strings.HasPrefix(lw, "subject:") {
 			w = w[8:]
 			if w != "" {
 				if exclude {
-					q.Where("Subject NOT LIKE ?", "%"+escPercentChar(w)+"%")
+					q.Where("Subject NOT ILIKE ?", "%"+escPercentChar(w)+"%")
 				} else {
-					q.Where("Subject LIKE ?", "%"+escPercentChar(w)+"%")
+					q.Where("Subject ILIKE ?", "%"+escPercentChar(w)+"%")
 				}
 			}
 		} else if strings.HasPrefix(lw, "message-id:") {
 			w = cleanString(w[11:])
 			if w != "" {
 				if exclude {
-					q.Where("MessageID NOT LIKE ?", "%"+escPercentChar(w)+"%")
+					q.Where("MessageID NOT ILIKE ?", "%"+escPercentChar(w)+"%")
 				} else {
-					q.Where("MessageID LIKE ?", "%"+escPercentChar(w)+"%")
+					q.Where("MessageID ILIKE ?", "%"+escPercentChar(w)+"%")
 				}
 			}
 		} else if strings.HasPrefix(lw, "tag:") {
@@ -513,9 +504,9 @@ func searchQueryBuilder(searchString, timezone string) *sqlf.Stmt {
 		} else {
 			// search text
 			if exclude {
-				q.Where("SearchText NOT LIKE ?", "%"+cleanString(escPercentChar(strings.ToLower(w)))+"%")
+				q.Where("SearchText NOT ILIKE ?", "%"+cleanString(escPercentChar(strings.ToLower(w)))+"%")
 			} else {
-				q.Where("SearchText LIKE ?", "%"+cleanString(escPercentChar(strings.ToLower(w)))+"%")
+				q.Where("SearchText ILIKE ?", "%"+cleanString(escPercentChar(strings.ToLower(w)))+"%")
 			}
 		}
 	}

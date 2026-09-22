@@ -3,7 +3,6 @@ package storage
 import (
 	"bytes"
 	"embed"
-	"log"
 	"path"
 	"sort"
 	"strings"
@@ -13,7 +12,7 @@ import (
 	"github.com/axllent/semver"
 )
 
-//go:embed schemas/*
+//go:embed schemas/pg/*
 var schemaScripts embed.FS
 
 // Create tables and apply schemas if required
@@ -22,47 +21,9 @@ func dbApplySchemas() error {
 		return err
 	}
 
-	var legacyMigrationTable int
-	err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)`, tenant("darwin_migrations")).Scan(&legacyMigrationTable)
+	schemaFiles, err := schemaScripts.ReadDir("schemas/pg")
 	if err != nil {
 		return err
-	}
-
-	if legacyMigrationTable == 1 {
-		rows, err := db.Query(`SELECT version FROM ` + tenant("darwin_migrations"))
-		if err != nil {
-			return err
-		}
-
-		legacySchemas := []string{}
-
-		for rows.Next() {
-			var oldID string
-			if err := rows.Scan(&oldID); err == nil {
-				legacySchemas = append(legacySchemas, semver.MajorMinor(oldID)+"."+semver.Patch(oldID))
-			}
-		}
-
-		legacySchemas = semver.SortMin(legacySchemas)
-
-		for _, v := range legacySchemas {
-			var migrated int
-			err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM `+tenant("schemas")+` WHERE Version = ?)`, v).Scan(&migrated)
-			if err != nil {
-				return err
-			}
-			if migrated == 0 {
-				// copy to tenant("schemas")
-				if _, err := db.Exec(`INSERT INTO `+tenant("schemas")+` (Version) VALUES (?)`, v); err != nil {
-					return err
-				}
-			}
-		}
-	}
-
-	schemaFiles, err := schemaScripts.ReadDir("schemas")
-	if err != nil {
-		log.Fatal(err)
 	}
 
 	temp := template.New("")
@@ -109,12 +70,11 @@ func dbApplySchemas() error {
 
 	for _, s := range scripts {
 		var complete int
-		err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM `+tenant("schemas")+` WHERE Version = ?)`, s.Semver).Scan(&complete)
-		if err != nil {
+		if err := db.QueryRow(`SELECT COUNT(*) FROM `+tenant("schemas")+` WHERE Version = $1`, s.Semver).Scan(&complete); err != nil {
 			return err
 		}
 
-		if complete == 1 {
+		if complete > 0 {
 			// already completed, ignore
 			continue
 		}
@@ -126,7 +86,7 @@ func dbApplySchemas() error {
 		}
 
 		// use path.Join for Windows compatibility, see https://github.com/golang/go/issues/44305
-		b, err := schemaScripts.ReadFile(path.Join("schemas", s.Name))
+		b, err := schemaScripts.ReadFile(path.Join("schemas/pg", s.Name))
 		if err != nil {
 			return err
 		}
@@ -143,11 +103,28 @@ func dbApplySchemas() error {
 			return err
 		}
 
-		if _, err := db.Exec(buf.String()); err != nil {
+		if err := execStatements(buf.String()); err != nil {
 			return err
 		}
 
-		if _, err := db.Exec(`INSERT INTO `+tenant("schemas")+` (Version) VALUES (?)`, s.Semver); err != nil {
+		if _, err := db.Exec(`INSERT INTO `+tenant("schemas")+` (Version) VALUES ($1)`, s.Semver); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// execStatements runs a multi-statement SQL script one statement at a time.
+// The pgx extended protocol rejects multiple commands in a single Exec, so we
+// split on ";" (safe here as the schema files contain no semicolons in literals).
+func execStatements(script string) error {
+	for _, stmt := range strings.Split(script, ";") {
+		s := strings.TrimSpace(stmt)
+		if s == "" {
+			continue
+		}
+		if _, err := db.Exec(s); err != nil {
 			return err
 		}
 	}

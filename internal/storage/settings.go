@@ -26,7 +26,7 @@ func SettingGet(k string) string {
 
 // SettingPut sets a setting string value, inserting if new
 func SettingPut(k, v string) error {
-	_, err := db.Exec(`INSERT INTO `+tenant("settings")+` (Key, Value) VALUES(?, ?) ON CONFLICT(Key) DO UPDATE SET Value = ?`, k, v, v)
+	_, err := db.Exec(`INSERT INTO `+tenant("settings")+` (Key, Value) VALUES($1, $2) ON CONFLICT(Key) DO UPDATE SET Value = EXCLUDED.Value`, k, v)
 	if err != nil {
 		logger.Log().Errorf("[db] %s", err.Error())
 	}
@@ -66,11 +66,11 @@ func totalMessagesSize() uint64 {
 
 // AddDeletedSize will add the value to the DeletedSize setting
 func addDeletedSize(v uint64) {
-	if _, err := db.Exec(`INSERT OR IGNORE INTO `+tenant("settings")+` (Key, Value) VALUES(?, ?)`, "DeletedSize", 0); err != nil {
+	if _, err := db.Exec(`INSERT INTO `+tenant("settings")+` (Key, Value) VALUES($1, $2) ON CONFLICT (Key) DO NOTHING`, "DeletedSize", "0"); err != nil {
 		logger.Log().Errorf("[db] %s", err.Error())
 	}
 
-	if _, err := db.Exec(`UPDATE `+tenant("settings")+` SET Value = Value + ? WHERE Key = ?`, v, "DeletedSize"); err != nil {
+	if _, err := db.Exec(`UPDATE `+tenant("settings")+` SET Value = (COALESCE(NULLIF(Value, '')::bigint, 0) + $1)::text WHERE Key = $2`, v, "DeletedSize"); err != nil {
 		logger.Log().Errorf("[db] %s", err.Error())
 	}
 }

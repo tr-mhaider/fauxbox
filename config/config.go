@@ -308,10 +308,6 @@ func VerifyConfig() error {
 		cssFontRestriction, cssFontRestriction,
 	)
 
-	if Database != "" && isDir(Database) {
-		Database = filepath.Join(Database, "mailpit.db")
-	}
-
 	if Compression < 0 || Compression > 3 {
 		return errors.New("[db] compression level must be between 0 and 3")
 	}

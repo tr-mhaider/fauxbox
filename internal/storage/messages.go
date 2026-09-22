@@ -7,7 +7,6 @@ import (
 	"crypto/sha1" // #nosec
 	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -95,9 +94,9 @@ func Store(body *[]byte, username *string) (string, error) {
 	attachments := len(env.Attachments)
 	snippet := tools.CreateSnippet(env.Text, env.HTML)
 
-	sql := fmt.Sprintf(`INSERT INTO %s 
-    	(Created, ID, MessageID, Subject, Metadata, Size, Inline, Attachments, SearchText, Read, Snippet) 
-	    VALUES(?,?,?,?,?,?,?,?,?,0,?)`,
+	sql := fmt.Sprintf(`INSERT INTO %s
+    	(Created, ID, MessageID, Subject, Metadata, Size, Inline, Attachments, SearchText, Read, Snippet)
+	    VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,0,$10)`,
 		tenant("mailbox"),
 	) // #nosec
 
@@ -111,17 +110,10 @@ func Store(body *[]byte, username *string) (string, error) {
 		// insert compressed raw message
 		compressed := dbEncoder.EncodeAll(*body, make([]byte, 0, size))
 
-		if sqlDriver == "rqlite" {
-			// rqlite does not support binary data in query, so we need to encode the compressed message into hexadecimal
-			// string and then generate the SQL query, which is more memory intensive, especially with large messages
-			hexStr := hex.EncodeToString(compressed)
-			_, err = tx.Exec(fmt.Sprintf(`INSERT INTO %s (ID, Email, Compressed) VALUES(?, x'%s', 1)`, tenant("mailbox_data"), hexStr), id) // #nosec
-		} else {
-			_, err = tx.Exec(fmt.Sprintf(`INSERT INTO %s (ID, Email, Compressed) VALUES(?, ?, 1)`, tenant("mailbox_data")), id, compressed) // #nosec
-		}
+		_, err = tx.Exec(fmt.Sprintf(`INSERT INTO %s (ID, Email, Compressed) VALUES($1, $2, 1)`, tenant("mailbox_data")), id, compressed) // #nosec
 	} else {
 		// insert uncompressed raw message
-		_, err = tx.Exec(fmt.Sprintf(`INSERT INTO %s (ID, Email, Compressed) VALUES(?, ?, 0)`, tenant("mailbox_data")), id, string(*body)) // #nosec
+		_, err = tx.Exec(fmt.Sprintf(`INSERT INTO %s (ID, Email, Compressed) VALUES($1, $2, 0)`, tenant("mailbox_data")), id, *body) // #nosec
 	}
 
 	if err != nil {
@@ -436,15 +428,7 @@ func GetMessageRaw(id string) ([]byte, error) {
 		return nil, errors.New("message not found")
 	}
 
-	var data []byte
-	if sqlDriver == "rqlite" && compressed == 1 {
-		data, err = base64.StdEncoding.DecodeString(msg)
-		if err != nil {
-			return nil, fmt.Errorf("error decoding base64 message: %w", err)
-		}
-	} else {
-		data = []byte(msg)
-	}
+	data := []byte(msg)
 
 	dbLastAction = time.Now()
 
@@ -546,15 +530,9 @@ func MarkRead(ids []string) error {
 		return nil
 	}
 
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-	placeholder := `(?` + strings.Repeat(",?", len(ids)-1) + `)`
-
 	// Find which messages are actually unread (will change state)
 	toUpdate := []string{}
-	rows, err := db.Query(fmt.Sprintf(`SELECT ID FROM %s WHERE Read = 0 AND ID IN %s`, tenant("mailbox"), placeholder), args...) // #nosec
+	rows, err := db.Query(fmt.Sprintf(`SELECT ID FROM %s WHERE Read = 0 AND ID = ANY($1)`, tenant("mailbox")), ids) // #nosec
 	if err != nil {
 		return err
 	}
@@ -572,13 +550,7 @@ func MarkRead(ids []string) error {
 		return nil
 	}
 
-	updateArgs := make([]any, len(toUpdate))
-	for i, id := range toUpdate {
-		updateArgs[i] = id
-	}
-	updatePlaceholder := `(?` + strings.Repeat(",?", len(toUpdate)-1) + `)`
-
-	if _, err := db.Exec(fmt.Sprintf(`UPDATE %s SET Read = 1 WHERE ID IN %s`, tenant("mailbox"), updatePlaceholder), updateArgs...); err != nil { // #nosec
+	if _, err := db.Exec(fmt.Sprintf(`UPDATE %s SET Read = 1 WHERE ID = ANY($1)`, tenant("mailbox")), toUpdate); err != nil { // #nosec
 		return err
 	}
 
@@ -601,15 +573,9 @@ func MarkUnread(ids []string) error {
 		return nil
 	}
 
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-	placeholder := `(?` + strings.Repeat(",?", len(ids)-1) + `)`
-
 	// Find which messages are actually read (will change state)
 	toUpdate := []string{}
-	rows, err := db.Query(fmt.Sprintf(`SELECT ID FROM %s WHERE Read = 1 AND ID IN %s`, tenant("mailbox"), placeholder), args...) // #nosec
+	rows, err := db.Query(fmt.Sprintf(`SELECT ID FROM %s WHERE Read = 1 AND ID = ANY($1)`, tenant("mailbox")), ids) // #nosec
 	if err != nil {
 		return err
 	}
@@ -627,13 +593,7 @@ func MarkUnread(ids []string) error {
 		return nil
 	}
 
-	updateArgs := make([]any, len(toUpdate))
-	for i, id := range toUpdate {
-		updateArgs[i] = id
-	}
-	updatePlaceholder := `(?` + strings.Repeat(",?", len(toUpdate)-1) + `)`
-
-	if _, err := db.Exec(fmt.Sprintf(`UPDATE %s SET Read = 0 WHERE ID IN %s`, tenant("mailbox"), updatePlaceholder), updateArgs...); err != nil { // #nosec
+	if _, err := db.Exec(fmt.Sprintf(`UPDATE %s SET Read = 0 WHERE ID = ANY($1)`, tenant("mailbox")), toUpdate); err != nil { // #nosec
 		return err
 	}
 
@@ -710,13 +670,8 @@ func DeleteMessages(ids []string) error {
 
 	start := time.Now()
 
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-
-	sql := fmt.Sprintf(`SELECT ID, Size FROM %s WHERE  ID IN (?%s)`, tenant("mailbox"), strings.Repeat(",?", len(args)-1)) // #nosec
-	rows, err := db.Query(sql, args...)
+	sql := fmt.Sprintf(`SELECT ID, Size FROM %s WHERE ID = ANY($1)`, tenant("mailbox")) // #nosec
+	rows, err := db.Query(sql, ids)
 	if err != nil {
 		return err
 	}
@@ -752,17 +707,12 @@ func DeleteMessages(ids []string) error {
 	// roll back if it fails
 	defer func() { _ = tx.Rollback() }()
 
-	args = make([]any, len(toDelete))
-	for i, id := range toDelete {
-		args[i] = id
-	}
-
 	tables := []string{"mailbox", "mailbox_data", "message_tags"}
 
 	for _, t := range tables {
-		sql = fmt.Sprintf(`DELETE FROM %s WHERE ID IN (?%s)`, tenant(t), strings.Repeat(",?", len(toDelete)-1))
+		sql = fmt.Sprintf(`DELETE FROM %s WHERE ID = ANY($1)`, tenant(t))
 
-		_, err = tx.Exec(sql, args...) // #nosec
+		_, err = tx.Exec(sql, toDelete) // #nosec
 		if err != nil {
 			return err
 		}
@@ -863,7 +813,7 @@ func DeleteAllMessages() error {
 // GetMetadata retrieves the metadata for a message by its ID
 func GetMetadata(id string) (Metadata, error) {
 	var metadataJSON string
-	row := db.QueryRow(fmt.Sprintf("SELECT Metadata FROM %s WHERE ID = ?", tenant("mailbox")), id)
+	row := db.QueryRow(fmt.Sprintf("SELECT Metadata FROM %s WHERE ID = $1", tenant("mailbox")), id)
 	if err := row.Scan(&metadataJSON); err != nil {
 		return Metadata{}, err
 	}

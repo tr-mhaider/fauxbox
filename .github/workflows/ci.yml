@@ -24,15 +24,18 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      # Wired now so the Phase 1 Postgres port needs no CI change.
+      # Tests read MP_DATABASE; the app also accepts DATABASE_URL.
+      MP_DATABASE: postgres://fauxbox:fauxbox@localhost:5432/fauxbox?sslmode=disable
       DATABASE_URL: postgres://fauxbox:fauxbox@localhost:5432/fauxbox?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # -p 1 runs packages serially: they share one PostgreSQL database and
+      # bind fixed SMTP/HTTP ports, so parallel packages would collide.
       - name: Test
-        run: go test ./...
+        run: go test -p 1 ./...
 
   web:
     name: Web build

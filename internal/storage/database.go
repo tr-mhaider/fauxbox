@@ -4,12 +4,9 @@ package storage
 import (
 	"context"
 	"database/sql"
-	"fmt"
+	"errors"
 	"os"
 	"os/signal"
-	"path"
-	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -18,16 +15,12 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/leporo/sqlf"
 
-	// sqlite - https://gitlab.com/cznic/sqlite
-	_ "modernc.org/sqlite"
-
-	// rqlite - https://github.com/rqlite/gorqlite | https://rqlite.io/
-	_ "github.com/rqlite/gorqlite/stdlib"
+	// pgx PostgreSQL driver (database/sql compatible)
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 var (
 	db           *sql.DB
-	sqlDriver    string
 	dbLastAction time.Time
 
 	// zstd compression encoder & decoder
@@ -39,11 +32,7 @@ var (
 
 // InitDB will initialise the database
 func InitDB() error {
-	// dbEncoder
-	var (
-		dsn string
-		err error
-	)
+	var err error
 
 	if config.Compression > 0 {
 		var compression zstd.EncoderLevel
@@ -64,42 +53,18 @@ func InitDB() error {
 		logger.Log().Debug("[db] storing messages with no compression")
 	}
 
-	p := config.Database
-
-	if p == "" {
-		// when no path is provided then we create a temporary file
-		// which will get deleted on Close(), SIGINT or SIGTERM
-		p = fmt.Sprintf("%s-%d.db", path.Join(os.TempDir(), "mailpit"), time.Now().UnixNano())
-		// delete the Unix socket file on exit
-		AddTempFile(p)
-		sqlDriver = "sqlite"
-		dsn = p
-		logger.Log().Debugf("[db] using temporary database: %s", p)
-	} else if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
-		sqlDriver = "rqlite"
-		dsn = p
-		logger.Log().Debugf("[db] opening rqlite database %s", p)
-	} else {
-		p = filepath.Clean(p)
-		sqlDriver = "sqlite"
-		dsn = fmt.Sprintf("file:%s?cache=shared", p)
-		logger.Log().Debugf("[db] opening database %s", p)
+	dsn := config.Database
+	if dsn == "" {
+		dsn = os.Getenv("DATABASE_URL")
 	}
-
-	config.Database = p
-
-	if sqlDriver == "sqlite" {
-		if !isFile(p) {
-			// try create a file to ensure permissions
-			f, err := os.Create(p)
-			if err != nil {
-				return fmt.Errorf("[db] %s", err.Error())
-			}
-			_ = f.Close()
-		}
+	if dsn == "" {
+		return errors.New("[db] no database configured, set MP_DATABASE or DATABASE_URL to a PostgreSQL connection string")
 	}
+	config.Database = dsn
 
-	db, err = sql.Open(sqlDriver, dsn)
+	logger.Log().Debug("[db] opening PostgreSQL database")
+
+	db, err = sql.Open("pgx", dsn)
 	if err != nil {
 		return err
 	}
@@ -114,22 +79,13 @@ func InitDB() error {
 		}
 	}
 
-	// prevent "database locked" errors
-	// @see https://github.com/mattn/go-sqlite3#faq
-	db.SetMaxOpenConns(1)
+	// PostgreSQL handles concurrent access, so use a real connection pool.
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(25)
+	db.SetConnMaxLifetime(time.Hour)
 
-	if sqlDriver == "sqlite" {
-		if config.DisableWAL {
-			// disable WAL mode for SQLite, allows NFS mounted DBs
-			_, err = db.Exec("PRAGMA journal_mode=DELETE; PRAGMA synchronous=NORMAL;")
-		} else {
-			// SQLite performance tuning (https://phiresky.github.io/blog/2020/sqlite-performance-tuning/)
-			_, err = db.Exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
-		}
-		if err != nil {
-			return err
-		}
-	}
+	// sqlf uses ? placeholders by default; PostgreSQL requires $N.
+	sqlf.SetDialect(sqlf.PostgreSQL)
 
 	// create tables if necessary & apply migrations
 	if err := dbApplySchemas(); err != nil {
@@ -141,15 +97,10 @@ func InitDB() error {
 	dbLastAction = time.Now()
 
 	sigs := make(chan os.Signal, 1)
-	// catch all signals since not explicitly listing
-	// Program that will listen to the SIGINT and SIGTERM
-	// SIGINT will listen to CTRL-C.
-	// SIGTERM will be caught if kill command executed
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
-	// method invoked upon seeing signal
 	go func() {
 		s := <-sigs
-		fmt.Printf("[db] got %s signal, shutting down\n", s)
+		logger.Log().Debugf("[db] got %s signal, shutting down", s)
 		Close()
 		os.Exit(0)
 	}()
@@ -164,24 +115,18 @@ func InitDB() error {
 
 // Tenant applies an optional prefix to the table name
 func tenant(table string) string {
-	return fmt.Sprintf("%s%s", config.TenantID, table)
+	return config.TenantID + table
 }
 
-// Close will close the database, and delete if temporary
+// Close will close the database
 func Close() {
-	// on a fatal exit (eg: ports blocked), allow Mailpit to run migration tasks before closing the DB
-	time.Sleep(200 * time.Millisecond)
-
 	if db != nil {
 		if err := db.Close(); err != nil {
 			logger.Log().Warn("[db] error closing database, ignoring")
 		}
 	}
 
-	// allow SQLite to finish closing DB & write WAL logs if local
-	time.Sleep(100 * time.Millisecond)
-
-	// delete all temporary files
+	// delete any temporary files (self-signed certs, unix sockets)
 	deleteTempFiles()
 }
 
@@ -209,7 +154,7 @@ func StatsGet() MailboxStats {
 
 // CountTotal returns the number of emails in the database
 func CountTotal() uint64 {
-	var total float64 // use float64 for rqlite compatibility
+	var total float64 // use float64 for numeric scan compatibility
 
 	_ = sqlf.From(tenant("mailbox")).
 		Select("COUNT(*)").To(&total).
@@ -220,7 +165,7 @@ func CountTotal() uint64 {
 
 // CountUnread returns the number of emails in the database that are unread.
 func CountUnread() uint64 {
-	var total float64 // use float64 for rqlite compatibility
+	var total float64
 
 	_ = sqlf.From(tenant("mailbox")).
 		Select("COUNT(*)").To(&total).
@@ -232,7 +177,7 @@ func CountUnread() uint64 {
 
 // CountRead returns the number of emails in the database that are read.
 func CountRead() uint64 {
-	var total float64 // use float64 for rqlite compatibility
+	var total float64
 
 	_ = sqlf.From(tenant("mailbox")).
 		Select("COUNT(*)").To(&total).
@@ -242,12 +187,11 @@ func CountRead() uint64 {
 	return uint64(total)
 }
 
-// DbSize returns the size of the SQLite database.
+// DbSize returns the size of the database.
 func DbSize() uint64 {
-	var total sql.NullFloat64 // use float64 for rqlite compatibility
+	var total sql.NullFloat64
 
-	err := db.QueryRow("SELECT page_count * page_size AS size FROM pragma_page_count(), pragma_page_size()").Scan(&total)
-
+	err := db.QueryRow("SELECT pg_database_size(current_database())").Scan(&total)
 	if err != nil {
 		logger.Log().Errorf("[db] %s", err.Error())
 	}

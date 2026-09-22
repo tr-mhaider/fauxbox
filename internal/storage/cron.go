@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"math"
-	"strings"
 	"time"
 
 	"github.com/axllent/mailpit/config"
@@ -16,11 +15,7 @@ import (
 // Database cron runs every minute
 func dbCron() {
 	if config.DisableAutoVACUUM {
-		if sqlDriver == "rqlite" {
-			logger.Log().Warn("[db] disable-auto-vacuum has no effect as rqlite handles vacuuming automatically")
-		} else {
-			logger.Log().Infof("[db] auto-VACUUM is disabled")
-		}
+		logger.Log().Infof("[db] auto-VACUUM is disabled")
 	}
 
 	for {
@@ -141,24 +136,19 @@ func pruneMessages() {
 	// roll back if it fails
 	defer func() { _ = tx.Rollback() }()
 
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-
-	_, err = tx.Exec(`DELETE FROM `+tenant("mailbox_data")+` WHERE ID IN (?`+strings.Repeat(",?", len(ids)-1)+`)`, args...) // #nosec
+	_, err = tx.Exec(`DELETE FROM `+tenant("mailbox_data")+` WHERE ID = ANY($1)`, ids) // #nosec
 	if err != nil {
 		logger.Log().Errorf("[db] %s", err.Error())
 		return
 	}
 
-	_, err = tx.Exec(`DELETE FROM `+tenant("message_tags")+` WHERE ID IN (?`+strings.Repeat(",?", len(ids)-1)+`)`, args...) // #nosec
+	_, err = tx.Exec(`DELETE FROM `+tenant("message_tags")+` WHERE ID = ANY($1)`, ids) // #nosec
 	if err != nil {
 		logger.Log().Errorf("[db] %s", err.Error())
 		return
 	}
 
-	_, err = tx.Exec(`DELETE FROM `+tenant("mailbox")+` WHERE ID IN (?`+strings.Repeat(",?", len(ids)-1)+`)`, args...) // #nosec
+	_, err = tx.Exec(`DELETE FROM `+tenant("mailbox")+` WHERE ID = ANY($1)`, ids) // #nosec
 	if err != nil {
 		logger.Log().Errorf("[db] %s", err.Error())
 		return
@@ -187,37 +177,10 @@ func pruneMessages() {
 	websockets.Broadcast("prune", nil)
 }
 
-// Vacuum the database to reclaim space from deleted messages
+// vacuumDb resets the deleted-size accounting. PostgreSQL reclaims space from
+// deleted rows via autovacuum, so no explicit VACUUM is issued here.
 func vacuumDb() {
-	if sqlDriver == "rqlite" {
-		// let rqlite handle vacuuming
-		return
-	}
-
-	start := time.Now()
-
-	// set WAL file checkpoint
-	if _, err := db.Exec("PRAGMA wal_checkpoint"); err != nil {
-		logger.Log().Errorf("[db] %s", err.Error())
-		return
-	}
-
-	// vacuum database
-	if _, err := db.Exec("VACUUM"); err != nil {
-		logger.Log().Errorf("[db] VACUUM: %s", err.Error())
-		return
-	}
-
-	// truncate WAL file
-	if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
-		logger.Log().Errorf("[db] %s", err.Error())
-		return
-	}
-
 	if err := SettingPut("DeletedSize", "0"); err != nil {
 		logger.Log().Errorf("[db] %s", err.Error())
 	}
-
-	elapsed := time.Since(start)
-	logger.Log().Debugf("[db] vacuum completed in %s", elapsed)
 }

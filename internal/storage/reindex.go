@@ -118,7 +118,7 @@ func ReindexAll() {
 
 		// insert mail summary data
 		for _, u := range updates {
-			_, err = tx.Exec(fmt.Sprintf(`UPDATE %s SET SearchText = ?, Snippet = ?, Metadata = ? WHERE ID = ?`, tenant("mailbox")), u.SearchText, u.Snippet, u.Metadata, u.ID)
+			_, err = tx.Exec(fmt.Sprintf(`UPDATE %s SET SearchText = $1, Snippet = $2, Metadata = $3::jsonb WHERE ID = $4`, tenant("mailbox")), u.SearchText, u.Snippet, u.Metadata, u.ID)
 			if err != nil {
 				logger.Log().Errorf("[db] %s", err.Error())
 				continue

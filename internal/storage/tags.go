@@ -89,7 +89,7 @@ func SetMessageTags(id string, tags []string) ([]string, error) {
 // AddMessageTag adds a tag to a message
 func addMessageTag(id, name string) (string, error) {
 	// Ensure the tag row exists; the UNIQUE index on Name makes concurrent inserts safe
-	if _, err := db.Exec(fmt.Sprintf(`INSERT OR IGNORE INTO %s (Name) VALUES (?)`, tenant("tags")), name); err != nil { // #nosec
+	if _, err := db.Exec(fmt.Sprintf(`INSERT INTO %s (Name) VALUES ($1) ON CONFLICT (Name) DO NOTHING`, tenant("tags")), name); err != nil { // #nosec
 		return name, err
 	}
 
@@ -129,18 +129,12 @@ func addMessageTag(id, name string) (string, error) {
 
 // deleteMessageTags deletes multiple tags from a message in a single query
 func deleteMessageTags(id string, names []string) error {
-	args := make([]any, 1+len(names))
-	args[0] = id
-	for i, n := range names {
-		args[i+1] = n
-	}
-
 	query := fmt.Sprintf(
-		`DELETE FROM %s WHERE ID = ? AND TagID IN (SELECT ID FROM %s WHERE Name IN (?%s))`,
-		tenant("message_tags"), tenant("tags"), strings.Repeat(",?", len(names)-1),
+		`DELETE FROM %s WHERE ID = $1 AND TagID IN (SELECT ID FROM %s WHERE Name = ANY($2))`,
+		tenant("message_tags"), tenant("tags"),
 	) // #nosec
 
-	if _, err := db.Exec(query, args...); err != nil {
+	if _, err := db.Exec(query, id, names); err != nil {
 		return err
 	}
 
@@ -368,17 +362,12 @@ func getTagsForIDs(ids []string) map[string][]string {
 		return result
 	}
 
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-
 	query := fmt.Sprintf(
-		`SELECT mt.ID, t.Name FROM %s t JOIN %s mt ON t.ID = mt.TagID WHERE mt.ID IN (?%s) ORDER BY mt.ID, t.Name`,
-		tenant("Tags"), tenant("message_tags"), strings.Repeat(",?", len(ids)-1),
+		`SELECT mt.ID, t.Name FROM %s t JOIN %s mt ON t.ID = mt.TagID WHERE mt.ID = ANY($1) ORDER BY mt.ID, t.Name`,
+		tenant("Tags"), tenant("message_tags"),
 	) // #nosec
 
-	rows, err := db.Query(query, args...)
+	rows, err := db.Query(query, ids)
 	if err != nil {
 		logger.Log().Errorf("[tags] %s", err.Error())
 		return result

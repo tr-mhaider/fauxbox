@@ -9,7 +9,7 @@ import (
 	"hash/crc32"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
+	"os"
 	"strings"
 	"testing"
 
@@ -67,12 +67,15 @@ func wrapBase64(b []byte) string {
 func initTestDB(t *testing.T) {
 	t.Helper()
 	logger.NoLogging = true
-	config.Database = filepath.Join(t.TempDir(), "mailpit.db")
+	config.Database = os.Getenv("MP_DATABASE")
 	config.Compression = 0
 	config.TenantID = ""
 	config.MaxMessages = 0
 	if err := storage.InitDB(); err != nil {
 		t.Fatalf("InitDB: %v", err)
+	}
+	if err := storage.DeleteAllMessages(); err != nil {
+		t.Fatalf("DeleteAllMessages: %v", err)
 	}
 	t.Cleanup(storage.Close)
 }
