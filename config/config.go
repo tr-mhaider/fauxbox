@@ -248,6 +248,10 @@ var (
 
 	// JWTSecret signs dashboard access & refresh tokens (Phase 3 auth)
 	JWTSecret string
+
+	// MultiTenant enables sandbox authentication & isolation enforcement on the
+	// API. When false, the app runs single-tenant (bypass) as before.
+	MultiTenant = false
 )
 
 // AutoTag struct for auto-tagging
