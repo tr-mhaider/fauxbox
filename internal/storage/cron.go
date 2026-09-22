@@ -158,7 +158,7 @@ func pruneMessages() {
 		logger.Log().Errorf("[db] %s", err.Error())
 	}
 
-	if err := pruneUnusedTags(); err != nil {
+	if err := pruneUnusedTags(WithBypass(context.Background())); err != nil {
 		logger.Log().Errorf("[db] %s", err.Error())
 	}
 

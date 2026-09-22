@@ -29,7 +29,7 @@ func TestTextEmailInserts(t *testing.T) {
 	t.Logf("Inserted %d text emails in %s", testRuns, time.Since(start))
 
 	delStart := time.Now()
-	if err := DeleteAllMessages(); err != nil {
+	if err := DeleteAllMessages(context.Background()); err != nil {
 		t.Log("error ", err)
 		t.Fail()
 	}
@@ -67,7 +67,7 @@ func TestMimeEmailInserts(t *testing.T) {
 		t.Logf("Inserted %d text emails in %s", testRuns, time.Since(start))
 
 		delStart := time.Now()
-		if err := DeleteAllMessages(); err != nil {
+		if err := DeleteAllMessages(context.Background()); err != nil {
 			t.Log("error ", err)
 			t.Fail()
 		}
@@ -102,7 +102,7 @@ func TestRetrieveMimeEmail(t *testing.T) {
 				t.Fail()
 			}
 
-			msg, err := GetMessage(id)
+			msg, err := GetMessage(context.Background(), id)
 			if err != nil {
 				t.Log("error ", err)
 				t.Fail()
@@ -119,14 +119,14 @@ func TestRetrieveMimeEmail(t *testing.T) {
 			assertEqual(t, len(msg.Inline), 1, "incorrect number of inline attachments")
 			assertEqual(t, msg.Inline[0].FileName, "inline-image.jpg", "inline attachment filename does not match")
 
-			attachmentData, err := GetAttachmentPart(id, msg.Attachments[0].PartID)
+			attachmentData, err := GetAttachmentPart(context.Background(), id, msg.Attachments[0].PartID)
 			if err != nil {
 				t.Log("error ", err)
 				t.Fail()
 			}
 			assertEqual(t, uint64(len(attachmentData.Content)), msg.Attachments[0].Size, "attachment size does not match")
 
-			inlineData, err := GetAttachmentPart(id, msg.Inline[0].PartID)
+			inlineData, err := GetAttachmentPart(context.Background(), id, msg.Inline[0].PartID)
 			if err != nil {
 				t.Log("error ", err)
 				t.Fail()
@@ -221,7 +221,7 @@ func TestInlineImageContentIdHandling(t *testing.T) {
 		t.Fatal("Failed to store test case 1:", err)
 	}
 
-	msg, err := GetMessage(storedMessage)
+	msg, err := GetMessage(context.Background(), storedMessage)
 	if err != nil {
 		t.Fatal("Failed to retrieve test case 1:", err)
 	}
@@ -250,7 +250,7 @@ func TestRegularAttachmentHandling(t *testing.T) {
 	if err != nil {
 		t.Fatal("Failed to store test case 3:", err)
 	}
-	msg, err := GetMessage(storedMessage)
+	msg, err := GetMessage(context.Background(), storedMessage)
 	if err != nil {
 		t.Fatal("Failed to retrieve test case 3:", err)
 	}
@@ -284,7 +284,7 @@ func TestMixedAttachmentHandling(t *testing.T) {
 	if err != nil {
 		t.Fatal("Failed to store test case 4:", err)
 	}
-	msg, err := GetMessage(storedMessage)
+	msg, err := GetMessage(context.Background(), storedMessage)
 	if err != nil {
 		t.Fatal("Failed to retrieve test case 4:", err)
 	}

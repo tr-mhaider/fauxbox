@@ -284,7 +284,8 @@ func hasAsset(id, url string) (bool, error) {
 // buildAssets parses the stored message HTML and returns the initial set of
 // linked asset URLs. Callers must hold assetsMutex.
 func buildAssets(id string) (MessageAssets, error) {
-	msg, err := storage.GetMessage(id)
+	// TODO(phase): thread the request sandbox context through the proxy asset cache.
+	msg, err := storage.GetMessage(context.Background(), id)
 	if err != nil {
 		return MessageAssets{}, err
 	}

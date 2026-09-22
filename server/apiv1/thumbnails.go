@@ -38,7 +38,7 @@ func Thumbnail(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	partID := r.PathValue("partID")
 
-	a, err := storage.GetAttachmentPart(id, partID)
+	a, err := storage.GetAttachmentPart(r.Context(), id, partID)
 	if err != nil {
 		httpError(w, err.Error())
 		return

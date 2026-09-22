@@ -50,7 +50,7 @@ func GetMessageHTML(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	msg, err := storage.GetMessage(id)
+	msg, err := storage.GetMessage(r.Context(), id)
 	if err != nil {
 		w.WriteHeader(404)
 		_, _ = fmt.Fprint(w, "Message not found")
@@ -134,7 +134,7 @@ func GetMessageText(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	msg, err := storage.GetMessage(id)
+	msg, err := storage.GetMessage(r.Context(), id)
 	if err != nil {
 		w.WriteHeader(404)
 		_, _ = fmt.Fprint(w, "Message not found")

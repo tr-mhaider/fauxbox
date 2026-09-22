@@ -2,7 +2,9 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,20 +44,24 @@ type envelopeInflight struct {
 // getCachedEnvelope returns a parsed envelope for the given message ID,
 // using the cache if available and deduplicating concurrent parses so
 // only one goroutine does the actual work.
-func getCachedEnvelope(id string) (*enmime.Envelope, uint64, error) {
+func getCachedEnvelope(ctx context.Context, id string) (*enmime.Envelope, uint64, error) {
+	// key by sandbox scope + id so one sandbox's cached parse is never served
+	// to another sandbox requesting the same (globally unique) message ID.
+	key := scopeKey(ctx) + "\x00" + id
+
 	envelopeCache.Lock()
 
 	// check for a valid cached entry
-	if entry, ok := envelopeCache.entries[id]; ok {
+	if entry, ok := envelopeCache.entries[key]; ok {
 		if time.Since(entry.created) < envelopeCacheTTL {
 			envelopeCache.Unlock()
 			return entry.env, entry.rawSize, nil
 		}
-		delete(envelopeCache.entries, id)
+		delete(envelopeCache.entries, key)
 	}
 
 	// another goroutine is already parsing this message - wait for it
-	if inf, ok := envelopeCache.inflight[id]; ok {
+	if inf, ok := envelopeCache.inflight[key]; ok {
 		envelopeCache.Unlock()
 		<-inf.done
 		return inf.env, inf.size, inf.err
@@ -63,7 +69,7 @@ func getCachedEnvelope(id string) (*enmime.Envelope, uint64, error) {
 
 	// we are the first - register as inflight and release the lock
 	inf := &envelopeInflight{done: make(chan struct{})}
-	envelopeCache.inflight[id] = inf
+	envelopeCache.inflight[key] = inf
 	envelopeCache.Unlock()
 
 	// ensure waiters are always unblocked, even on panic
@@ -74,9 +80,9 @@ func getCachedEnvelope(id string) (*enmime.Envelope, uint64, error) {
 		close(inf.done)
 
 		envelopeCache.Lock()
-		delete(envelopeCache.inflight, id)
+		delete(envelopeCache.inflight, key)
 		if inf.err == nil {
-			envelopeCache.entries[id] = &envelopeCacheEntry{
+			envelopeCache.entries[key] = &envelopeCacheEntry{
 				env:     inf.env,
 				rawSize: inf.size,
 				created: time.Now(),
@@ -85,14 +91,14 @@ func getCachedEnvelope(id string) (*enmime.Envelope, uint64, error) {
 		envelopeCache.Unlock()
 	}()
 
-	inf.env, inf.size, inf.err = parseEnvelope(id)
+	inf.env, inf.size, inf.err = parseEnvelope(ctx, id)
 
 	return inf.env, inf.size, inf.err
 }
 
 // parseEnvelope fetches a raw message from the database and parses it with enmime.
-func parseEnvelope(id string) (*enmime.Envelope, uint64, error) {
-	raw, err := GetMessageRaw(id)
+func parseEnvelope(ctx context.Context, id string) (*enmime.Envelope, uint64, error) {
+	raw, err := GetMessageRaw(ctx, id)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -108,8 +114,13 @@ func parseEnvelope(id string) (*enmime.Envelope, uint64, error) {
 // invalidateEnvelopeCache removes a specific message from the cache,
 // e.g. when a message is deleted.
 func invalidateEnvelopeCache(id string) {
+	suffix := "\x00" + id
 	envelopeCache.Lock()
-	delete(envelopeCache.entries, id)
+	for k := range envelopeCache.entries {
+		if k == id || strings.HasSuffix(k, suffix) {
+			delete(envelopeCache.entries, k)
+		}
+	}
 	envelopeCache.Unlock()
 }
 

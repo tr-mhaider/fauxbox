@@ -414,7 +414,7 @@ func setup() {
 		panic(err)
 	}
 
-	if err := storage.DeleteAllMessages(); err != nil {
+	if err := storage.DeleteAllMessages(context.Background()); err != nil {
 		panic(err)
 	}
 
@@ -509,7 +509,7 @@ func insertEmailData(t *testing.T) {
 			t.Fail()
 		}
 
-		if _, err := storage.SetMessageTags(id, []string{fmt.Sprintf("Test tag %03d", i)}); err != nil {
+		if _, err := storage.SetMessageTags(context.Background(), id, []string{fmt.Sprintf("Test tag %03d", i)}); err != nil {
 			t.Log("error ", err)
 			t.Fail()
 		}

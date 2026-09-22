@@ -44,7 +44,7 @@ func GetMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	msg, err := storage.GetMessage(id)
+	msg, err := storage.GetMessage(r.Context(), id)
 	if err != nil {
 		fourOFour(w)
 		return
@@ -88,7 +88,7 @@ func GetHeaders(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	data, err := storage.GetMessageRaw(id)
+	data, err := storage.GetMessageRaw(r.Context(), id)
 	if err != nil {
 		fourOFour(w)
 		return
@@ -142,7 +142,7 @@ func DownloadAttachment(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	a, err := storage.GetAttachmentPart(id, partID)
+	a, err := storage.GetAttachmentPart(r.Context(), id, partID)
 	if err != nil {
 		fourOFour(w)
 		return
@@ -199,7 +199,7 @@ func DownloadRaw(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	data, err := storage.GetMessageRaw(id)
+	data, err := storage.GetMessageRaw(r.Context(), id)
 	if err != nil {
 		fourOFour(w)
 		return

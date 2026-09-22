@@ -36,14 +36,14 @@ func TestTags(t *testing.T) {
 		}
 
 		for i := range 10 {
-			if _, err := SetMessageTags(ids[i], []string{fmt.Sprintf("Tag-%d", i)}); err != nil {
+			if _, err := SetMessageTags(context.Background(), ids[i], []string{fmt.Sprintf("Tag-%d", i)}); err != nil {
 				t.Log("error ", err)
 				t.Fail()
 			}
 		}
 
 		for i := range 10 {
-			message, err := GetMessage(ids[i])
+			message, err := GetMessage(context.Background(), ids[i])
 			if err != nil {
 				t.Log("error ", err)
 				t.Fail()
@@ -54,7 +54,7 @@ func TestTags(t *testing.T) {
 			}
 		}
 
-		if err := DeleteAllMessages(); err != nil {
+		if err := DeleteAllMessages(context.Background()); err != nil {
 			t.Log("error ", err)
 			t.Fail()
 		}
@@ -70,19 +70,19 @@ func TestTags(t *testing.T) {
 			// pad number with 0 to ensure they are returned alphabetically
 			newTags = append(newTags, fmt.Sprintf("AnotherTag %02d", i))
 		}
-		if _, err := SetMessageTags(id, newTags); err != nil {
+		if _, err := SetMessageTags(context.Background(), id, newTags); err != nil {
 			t.Log("error ", err)
 			t.Fail()
 		}
-		returnedTags := getMessageTags(id)
+		returnedTags := getMessageTags(context.Background(), id)
 		assertEqual(t, strings.Join(newTags, "|"), strings.Join(returnedTags, "|"), "Message tags do not match")
 
 		// remove first tag
-		if err := deleteMessageTag(id, newTags[0]); err != nil {
+		if err := deleteMessageTag(context.Background(), id, newTags[0]); err != nil {
 			t.Log("error ", err)
 			t.Fail()
 		}
-		returnedTags = getMessageTags(id)
+		returnedTags = getMessageTags(context.Background(), id)
 		assertEqual(t, strings.Join(newTags[1:], "|"), strings.Join(returnedTags, "|"), "Message tags do not match after deleting 1")
 
 		// remove all tags
@@ -90,15 +90,15 @@ func TestTags(t *testing.T) {
 			t.Log("error ", err)
 			t.Fail()
 		}
-		returnedTags = getMessageTags(id)
+		returnedTags = getMessageTags(context.Background(), id)
 		assertEqual(t, "", strings.Join(returnedTags, "|"), "Message tags should be empty")
 
 		// apply the same tag twice
-		if _, err := SetMessageTags(id, []string{"Duplicate Tag", "Duplicate Tag"}); err != nil {
+		if _, err := SetMessageTags(context.Background(), id, []string{"Duplicate Tag", "Duplicate Tag"}); err != nil {
 			t.Log("error ", err)
 			t.Fail()
 		}
-		returnedTags = getMessageTags(id)
+		returnedTags = getMessageTags(context.Background(), id)
 		assertEqual(t, "Duplicate Tag", strings.Join(returnedTags, "|"), "Message tags should be duplicated")
 		if err := deleteAllMessageTags(id); err != nil {
 			t.Log("error ", err)
@@ -106,11 +106,11 @@ func TestTags(t *testing.T) {
 		}
 
 		// apply tag with invalid characters
-		if _, err := SetMessageTags(id, []string{"Dirty! \"Tag\""}); err != nil {
+		if _, err := SetMessageTags(context.Background(), id, []string{"Dirty! \"Tag\""}); err != nil {
 			t.Log("error ", err)
 			t.Fail()
 		}
-		returnedTags = getMessageTags(id)
+		returnedTags = getMessageTags(context.Background(), id)
 		assertEqual(t, "Dirty Tag", strings.Join(returnedTags, "|"), "Dirty message tag did not clean as expected")
 		if err := deleteAllMessageTags(id); err != nil {
 			t.Log("error ", err)
@@ -118,10 +118,10 @@ func TestTags(t *testing.T) {
 		}
 
 		// Check deleted message tags also prune the tags database
-		allTags := GetAllTags()
+		allTags := GetAllTags(context.Background())
 		assertEqual(t, "", strings.Join(allTags, "|"), "Tags did not delete as expected")
 
-		if err := DeleteAllMessages(); err != nil {
+		if err := DeleteAllMessages(context.Background()); err != nil {
 			t.Log("error ", err)
 			t.Fail()
 		}
@@ -133,7 +133,7 @@ func TestTags(t *testing.T) {
 			t.Fail()
 		}
 
-		returnedTags = getMessageTags(id)
+		returnedTags = getMessageTags(context.Background(), id)
 		assertEqual(t, "BccTag|CcTag|FromFag|ToTag|X-tag1|X-tag2", strings.Join(returnedTags, "|"), "Tags not detected correctly")
 		if err := deleteAllMessageTags(id); err != nil {
 			t.Log("error ", err)
@@ -156,7 +156,7 @@ func TestUsernameAutoTagging(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Store failed: %v", err)
 		}
-		msg, err := GetMessage(id)
+		msg, err := GetMessage(context.Background(), id)
 		if err != nil {
 			t.Fatalf("GetMessage failed: %v", err)
 		}
@@ -172,7 +172,7 @@ func TestUsernameAutoTagging(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Store failed: %v", err)
 		}
-		msg, err := GetMessage(id)
+		msg, err := GetMessage(context.Background(), id)
 		if err != nil {
 			t.Fatalf("GetMessage failed: %v", err)
 		}
@@ -192,5 +192,5 @@ func deleteAllMessageTags(id string) error {
 		return err
 	}
 
-	return pruneUnusedTags()
+	return pruneUnusedTags(context.Background())
 }

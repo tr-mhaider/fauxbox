@@ -7,6 +7,7 @@ package pop3
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -96,7 +97,7 @@ func handleClient(conn net.Conn) {
 	defer func() {
 		if state == UPDATE {
 			if len(toDelete) > 0 {
-				if err := storage.DeleteMessages(toDelete); err != nil {
+				if err := storage.DeleteMessages(context.Background(), toDelete); err != nil {
 					logger.Log().Errorf("[pop3] error deleting: %s", err.Error())
 				}
 				// Update web UI to remove deleted messages
@@ -314,7 +315,7 @@ func handleTransactionCommand(conn net.Conn, cmd string, args []string, messages
 		}
 
 		m := messages[nr-1]
-		raw, err := storage.GetMessageRaw(m.ID)
+		raw, err := storage.GetMessageRaw(context.Background(), m.ID)
 		if err != nil {
 			sendResponse(conn, "-ERR no such message")
 			return

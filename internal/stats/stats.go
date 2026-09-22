@@ -2,6 +2,7 @@
 package stats
 
 import (
+	"context"
 	"runtime"
 	"sync"
 	"time"
@@ -133,7 +134,7 @@ func Load(detectLatestVersion bool) AppInformation {
 	info.DatabaseSize = storage.DbSize()
 	info.Messages = storage.CountTotal()
 	info.Unread = storage.CountUnread()
-	info.Tags = storage.GetAllTagsCount()
+	info.Tags = storage.GetAllTagsCount(context.Background())
 
 	return info
 }

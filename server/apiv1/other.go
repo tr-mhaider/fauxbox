@@ -45,7 +45,7 @@ func HTMLCheck(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	raw, err := storage.GetMessageRaw(id)
+	raw, err := storage.GetMessageRaw(r.Context(), id)
 	if err != nil {
 		fourOFour(w)
 		return
@@ -114,7 +114,7 @@ func LinkCheck(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	msg, err := storage.GetMessage(id)
+	msg, err := storage.GetMessage(r.Context(), id)
 	if err != nil {
 		fourOFour(w)
 		return
@@ -167,7 +167,7 @@ func SpamAssassinCheck(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	msg, err := storage.GetMessageRaw(id)
+	msg, err := storage.GetMessageRaw(r.Context(), id)
 	if err != nil {
 		fourOFour(w)
 		return

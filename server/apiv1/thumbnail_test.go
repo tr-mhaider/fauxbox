@@ -75,7 +75,7 @@ func initTestDB(t *testing.T) {
 	if err := storage.InitDB(); err != nil {
 		t.Fatalf("InitDB: %v", err)
 	}
-	if err := storage.DeleteAllMessages(); err != nil {
+	if err := storage.DeleteAllMessages(context.Background()); err != nil {
 		t.Fatalf("DeleteAllMessages: %v", err)
 	}
 	t.Cleanup(storage.Close)
@@ -96,7 +96,7 @@ func storeEmailWithPNG(t *testing.T, subject string, png []byte) (msgID, partID 
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	msg, err := storage.GetMessage(id)
+	msg, err := storage.GetMessage(context.Background(), id)
 	if err != nil {
 		t.Fatalf("GetMessage: %v", err)
 	}

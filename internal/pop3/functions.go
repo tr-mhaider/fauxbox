@@ -54,7 +54,7 @@ func getMessages() ([]message, error) {
 // POP3 TOP command returns the headers, followed by the next x lines
 func getTop(id string, nr int) (string, string, error) {
 	var header, body string
-	raw, err := storage.GetMessageRaw(id)
+	raw, err := storage.GetMessageRaw(context.Background(), id)
 	if err != nil {
 		return header, body, errors.New("-ERR no such message")
 	}

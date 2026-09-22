@@ -46,7 +46,7 @@ func ReleaseMessage(w http.ResponseWriter, r *http.Request) {
 
 	id := r.PathValue("id")
 
-	msg, err := storage.GetMessageRaw(id)
+	msg, err := storage.GetMessageRaw(r.Context(), id)
 	if err != nil {
 		fourOFour(w)
 		return

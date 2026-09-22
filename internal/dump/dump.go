@@ -250,7 +250,7 @@ func saveMessages() error {
 			}
 		} else {
 			var err error
-			b, err = storage.GetMessageRaw(id)
+			b, err = storage.GetMessageRaw(context.Background(), id)
 			if err != nil {
 				logger.Log().Errorf("error fetching message %s: %s", id, err.Error())
 				continue

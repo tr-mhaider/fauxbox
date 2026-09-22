@@ -133,11 +133,11 @@ func Store(ctx context.Context, body *[]byte, username *string) (string, error) 
 	}
 
 	// extract tags from search matches, and sort and extract unique tags
-	tags = sortedUniqueTags(append(tags, tagFilterMatches(id)...))
+	tags = sortedUniqueTags(append(tags, tagFilterMatches(ctx, id)...))
 
 	setTags := []string{}
 	if len(tags) > 0 {
-		setTags, err = SetMessageTags(id, tags)
+		setTags, err = SetMessageTags(ctx, id, tags)
 		if err != nil {
 			return "", err
 		}
@@ -286,14 +286,14 @@ func List(ctx context.Context, start int, beforeTS int64, limit int) ([]MessageS
 
 // GetMessage returns a Message generated from the mailbox_data collection.
 // If the message lacks a date header, then the received datetime is used.
-func GetMessage(id string) (*Message, error) {
-	env, rawSize, err := getCachedEnvelope(id)
+func GetMessage(ctx context.Context, id string) (*Message, error) {
+	env, rawSize, err := getCachedEnvelope(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
 	// Load metadata from DB
-	meta, err := GetMetadata(id)
+	meta, err := GetMetadata(ctx, id)
 	if err != nil {
 		meta = Metadata{}
 	}
@@ -318,20 +318,21 @@ func GetMessage(id string) (*Message, error) {
 	date, err := env.Date()
 	if err != nil {
 		// return received datetime when message does not contain a date header
-		q := sqlf.From(tenant("mailbox")).
-			Select(`Created`).
-			Where(`ID = ?`, id)
+		if err := withScope(ctx, func(ex sqlf.Executor) error {
+			return sqlf.From(tenant("mailbox")).
+				Select(`Created`).
+				Where(`ID = ?`, id).
+				QueryAndClose(ctx, ex, func(row *sql.Rows) {
+					var created float64 // use float64 for rqlite compatibility
 
-		if err := q.QueryAndClose(context.TODO(), db, func(row *sql.Rows) {
-			var created float64 // use float64 for rqlite compatibility
+					if err := row.Scan(&created); err != nil {
+						logger.Log().Errorf("[db] %s", err.Error())
+						return
+					}
 
-			if err := row.Scan(&created); err != nil {
-				logger.Log().Errorf("[db] %s", err.Error())
-				return
-			}
-
-			logger.Log().Debugf("[db] %s does not contain a date header, using received datetime", id)
-			date = time.UnixMilli(int64(created))
+					logger.Log().Debugf("[db] %s does not contain a date header, using received datetime", id)
+					date = time.UnixMilli(int64(created))
+				})
 		}); err != nil {
 			logger.Log().Errorf("[db] %s", err.Error())
 		}
@@ -348,7 +349,7 @@ func GetMessage(id string) (*Message, error) {
 		ReplyTo:    addressToSlice(env, "Reply-To"),
 		ReturnPath: returnPath,
 		Subject:    env.GetHeader("Subject"),
-		Tags:       getMessageTags(id),
+		Tags:       getMessageTags(ctx, id),
 		Size:       rawSize,
 		Text:       env.Text,
 		Username:   meta.Username,
@@ -390,7 +391,7 @@ func GetMessage(id string) (*Message, error) {
 	}
 
 	// mark message as read
-	if err := MarkRead([]string{id}); err != nil {
+	if err := MarkRead(ctx, []string{id}); err != nil {
 		return &obj, err
 	}
 
@@ -400,15 +401,17 @@ func GetMessage(id string) (*Message, error) {
 }
 
 // GetMessageRaw returns an []byte of the full message
-func GetMessageRaw(id string) ([]byte, error) {
+func GetMessageRaw(ctx context.Context, id string) ([]byte, error) {
 	var i, msg string
 	var compressed int
-	q := sqlf.From(tenant("mailbox_data")).
-		Select(`ID`).To(&i).
-		Select(`Email`).To(&msg).
-		Select(`Compressed`).To(&compressed).
-		Where(`ID = ?`, id)
-	err := q.QueryRowAndClose(context.Background(), db)
+	err := withScope(ctx, func(ex sqlf.Executor) error {
+		return sqlf.From(tenant("mailbox_data")).
+			Select(`ID`).To(&i).
+			Select(`Email`).To(&msg).
+			Select(`Compressed`).To(&compressed).
+			Where(`ID = ?`, id).
+			QueryRowAndClose(ctx, ex)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -434,8 +437,8 @@ func GetMessageRaw(id string) ([]byte, error) {
 }
 
 // GetAttachmentPart returns an *enmime.Part (attachment or inline) from a message
-func GetAttachmentPart(id, partID string) (*enmime.Part, error) {
-	env, _, err := getCachedEnvelope(id)
+func GetAttachmentPart(ctx context.Context, id, partID string) (*enmime.Part, error) {
+	env, _, err := getCachedEnvelope(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -496,7 +499,7 @@ func LatestID(r *http.Request) (string, error) {
 
 	search := strings.TrimSpace(r.URL.Query().Get("query"))
 	if search != "" {
-		messages, _, err = Search(search, r.URL.Query().Get("tz"), 0, 0, 1)
+		messages, _, err = Search(r.Context(), search, r.URL.Query().Get("tz"), 0, 0, 1)
 		if err != nil {
 			return "", err
 		}
@@ -514,33 +517,40 @@ func LatestID(r *http.Request) (string, error) {
 }
 
 // MarkRead will mark a message as read
-func MarkRead(ids []string) error {
+func MarkRead(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
 
 	// Find which messages are actually unread (will change state)
 	toUpdate := []string{}
-	rows, err := db.Query(fmt.Sprintf(`SELECT ID FROM %s WHERE Read = 0 AND ID = ANY($1)`, tenant("mailbox")), ids) // #nosec
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
+	if err := withScope(ctx, func(ex sqlf.Executor) error {
+		rows, err := ex.QueryContext(ctx, fmt.Sprintf(`SELECT ID FROM %s WHERE Read = 0 AND ID = ANY($1)`, tenant("mailbox")), ids) // #nosec
+		if err != nil {
 			return err
 		}
-		toUpdate = append(toUpdate, id)
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			toUpdate = append(toUpdate, id)
+		}
+		_ = rows.Close()
+
+		if len(toUpdate) == 0 {
+			return nil
+		}
+
+		_, err = ex.ExecContext(ctx, fmt.Sprintf(`UPDATE %s SET Read = 1 WHERE ID = ANY($1)`, tenant("mailbox")), toUpdate) // #nosec
+		return err
+	}); err != nil {
+		return err
 	}
-	_ = rows.Close()
 
 	if len(toUpdate) == 0 {
 		return nil
-	}
-
-	if _, err := db.Exec(fmt.Sprintf(`UPDATE %s SET Read = 1 WHERE ID = ANY($1)`, tenant("mailbox")), toUpdate); err != nil { // #nosec
-		return err
 	}
 
 	for _, id := range toUpdate {
@@ -557,33 +567,40 @@ func MarkRead(ids []string) error {
 }
 
 // MarkUnread will mark a message as unread
-func MarkUnread(ids []string) error {
+func MarkUnread(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
 
 	// Find which messages are actually read (will change state)
 	toUpdate := []string{}
-	rows, err := db.Query(fmt.Sprintf(`SELECT ID FROM %s WHERE Read = 1 AND ID = ANY($1)`, tenant("mailbox")), ids) // #nosec
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
+	if err := withScope(ctx, func(ex sqlf.Executor) error {
+		rows, err := ex.QueryContext(ctx, fmt.Sprintf(`SELECT ID FROM %s WHERE Read = 1 AND ID = ANY($1)`, tenant("mailbox")), ids) // #nosec
+		if err != nil {
 			return err
 		}
-		toUpdate = append(toUpdate, id)
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			toUpdate = append(toUpdate, id)
+		}
+		_ = rows.Close()
+
+		if len(toUpdate) == 0 {
+			return nil
+		}
+
+		_, err = ex.ExecContext(ctx, fmt.Sprintf(`UPDATE %s SET Read = 0 WHERE ID = ANY($1)`, tenant("mailbox")), toUpdate) // #nosec
+		return err
+	}); err != nil {
+		return err
 	}
-	_ = rows.Close()
 
 	if len(toUpdate) == 0 {
 		return nil
-	}
-
-	if _, err := db.Exec(fmt.Sprintf(`UPDATE %s SET Read = 0 WHERE ID = ANY($1)`, tenant("mailbox")), toUpdate); err != nil { // #nosec
-		return err
 	}
 
 	dbLastAction = time.Now()
@@ -602,17 +619,19 @@ func MarkUnread(ids []string) error {
 }
 
 // MarkAllRead will mark all messages as read
-func MarkAllRead() error {
+func MarkAllRead(ctx context.Context) error {
 	var (
 		start = time.Now()
 		total = CountUnread()
 	)
 
-	_, err := sqlf.Update(tenant("mailbox")).
-		Set("Read", 1).
-		Where("Read = ?", 0).
-		ExecAndClose(context.Background(), db)
-	if err != nil {
+	if err := withScope(ctx, func(ex sqlf.Executor) error {
+		_, err := sqlf.Update(tenant("mailbox")).
+			Set("Read", 1).
+			Where("Read = ?", 0).
+			ExecAndClose(ctx, ex)
+		return err
+	}); err != nil {
 		return err
 	}
 
@@ -627,17 +646,19 @@ func MarkAllRead() error {
 }
 
 // MarkAllUnread will mark all messages as unread
-func MarkAllUnread() error {
+func MarkAllUnread(ctx context.Context) error {
 	var (
 		start = time.Now()
 		total = CountRead()
 	)
 
-	_, err := sqlf.Update(tenant("mailbox")).
-		Set("Read", 0).
-		Where("Read = ?", 1).
-		ExecAndClose(context.Background(), db)
-	if err != nil {
+	if err := withScope(ctx, func(ex sqlf.Executor) error {
+		_, err := sqlf.Update(tenant("mailbox")).
+			Set("Read", 0).
+			Where("Read = ?", 1).
+			ExecAndClose(ctx, ex)
+		return err
+	}); err != nil {
 		return err
 	}
 
@@ -652,36 +673,50 @@ func MarkAllUnread() error {
 }
 
 // DeleteMessages deletes one or more messages in bulk
-func DeleteMessages(ids []string) error {
+func DeleteMessages(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
 
 	start := time.Now()
 
-	sql := fmt.Sprintf(`SELECT ID, Size FROM %s WHERE ID = ANY($1)`, tenant("mailbox")) // #nosec
-	rows, err := db.Query(sql, ids)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = rows.Close() }()
-
 	toDelete := []string{}
 	var totalSize uint64
 
-	for rows.Next() {
-		var id string
-		var size float64 // use float64 for rqlite compatibility
-
-		if err := rows.Scan(&id, &size); err != nil {
+	if err := withScope(ctx, func(ex sqlf.Executor) error {
+		rows, err := ex.QueryContext(ctx, fmt.Sprintf(`SELECT ID, Size FROM %s WHERE ID = ANY($1)`, tenant("mailbox")), ids) // #nosec
+		if err != nil {
 			return err
 		}
 
-		toDelete = append(toDelete, id)
-		totalSize = totalSize + uint64(size)
-	}
+		for rows.Next() {
+			var id string
+			var size float64 // use float64 for rqlite compatibility
+			if err := rows.Scan(&id, &size); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			toDelete = append(toDelete, id)
+			totalSize = totalSize + uint64(size)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		_ = rows.Close()
 
-	if err = rows.Err(); err != nil {
+		if len(toDelete) == 0 {
+			return nil
+		}
+
+		for _, t := range []string{"mailbox", "mailbox_data", "message_tags"} {
+			if _, err := ex.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE ID = ANY($1)`, tenant(t)), toDelete); err != nil { // #nosec
+				return err
+			}
+		}
+
+		return nil
+	}); err != nil {
 		return err
 	}
 
@@ -689,34 +724,12 @@ func DeleteMessages(ids []string) error {
 		return nil // nothing to delete
 	}
 
-	tx, err := db.BeginTx(context.Background(), nil)
-	if err != nil {
-		return err
-	}
-	// roll back if it fails
-	defer func() { _ = tx.Rollback() }()
-
-	tables := []string{"mailbox", "mailbox_data", "message_tags"}
-
-	for _, t := range tables {
-		sql = fmt.Sprintf(`DELETE FROM %s WHERE ID = ANY($1)`, tenant(t))
-
-		_, err = tx.Exec(sql, toDelete) // #nosec
-		if err != nil {
-			return err
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-
 	dbLastAction = time.Now()
 	addDeletedSize(totalSize)
 
 	logMessagesDeleted(len(toDelete))
 
-	_ = pruneUnusedTags()
+	_ = pruneUnusedTags(ctx)
 
 	elapsed := time.Since(start)
 
@@ -744,37 +757,27 @@ func DeleteMessages(ids []string) error {
 }
 
 // DeleteAllMessages will delete all messages from a mailbox
-func DeleteAllMessages() error {
+func DeleteAllMessages(ctx context.Context) error {
 	var (
 		start = time.Now()
 		total int
 	)
 
-	_ = sqlf.From(tenant("mailbox")).
-		Select("COUNT(*)").To(&total).
-		QueryRowAndClose(context.TODO(), db)
-
-	// begin a transaction to ensure both the message
-	// summaries and data are deleted successfully
-	tx, err := db.BeginTx(context.Background(), nil)
-	if err != nil {
-		return err
-	}
-
-	// roll back if it fails
-	defer func() { _ = tx.Rollback() }()
-
-	tables := []string{"mailbox", "mailbox_data", "tags", "message_tags"}
-
-	for _, t := range tables {
-		sql := fmt.Sprintf(`DELETE FROM %s`, tenant(t)) // #nosec
-		_, err := tx.Exec(sql)
-		if err != nil {
+	if err := withScope(ctx, func(ex sqlf.Executor) error {
+		if err := sqlf.From(tenant("mailbox")).
+			Select("COUNT(*)").To(&total).
+			QueryRowAndClose(ctx, ex); err != nil {
 			return err
 		}
-	}
 
-	if err := tx.Commit(); err != nil {
+		for _, t := range []string{"mailbox", "mailbox_data", "tags", "message_tags"} {
+			if _, err := ex.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s`, tenant(t))); err != nil { // #nosec
+				return err
+			}
+		}
+
+		return nil
+	}); err != nil {
 		return err
 	}
 
@@ -796,14 +799,15 @@ func DeleteAllMessages() error {
 
 	websockets.Broadcast("truncate", nil)
 
-	return err
+	return nil
 }
 
 // GetMetadata retrieves the metadata for a message by its ID
-func GetMetadata(id string) (Metadata, error) {
+func GetMetadata(ctx context.Context, id string) (Metadata, error) {
 	var metadataJSON string
-	row := db.QueryRow(fmt.Sprintf("SELECT Metadata FROM %s WHERE ID = $1", tenant("mailbox")), id)
-	if err := row.Scan(&metadataJSON); err != nil {
+	if err := withScope(ctx, func(ex sqlf.Executor) error {
+		return ex.QueryRowContext(ctx, fmt.Sprintf("SELECT Metadata FROM %s WHERE ID = $1", tenant("mailbox")), id).Scan(&metadataJSON)
+	}); err != nil {
 		return Metadata{}, err
 	}
 	var meta Metadata

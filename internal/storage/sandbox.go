@@ -50,6 +50,16 @@ func scopeFromCtx(ctx context.Context) scope {
 	return scope{bypass: true}
 }
 
+// scopeKey returns a stable cache-key prefix for the ctx's scope, so caches
+// keyed by message ID cannot serve one sandbox's data to another.
+func scopeKey(ctx context.Context) string {
+	s := scopeFromCtx(ctx)
+	if s.bypass {
+		return ""
+	}
+	return s.sandboxID
+}
+
 // withScope runs fn inside a transaction. For a sandbox-scoped context it sets
 // the RLS role and the app.current_sandbox GUC (transaction-local) so every
 // query fn issues is filtered to that sandbox; for a bypass context it runs as

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"testing"
@@ -29,7 +30,7 @@ func setup(tenantID string) {
 	var err error
 
 	// ensure DB is empty
-	if err := DeleteAllMessages(); err != nil {
+	if err := DeleteAllMessages(context.Background()); err != nil {
 		panic(err)
 	}
 

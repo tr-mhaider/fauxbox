@@ -20,7 +20,7 @@ var (
 )
 
 // SetMessageTags will set the tags for a given database ID, removing any not in the array
-func SetMessageTags(id string, tags []string) ([]string, error) {
+func SetMessageTags(ctx context.Context, id string, tags []string) ([]string, error) {
 	// Clean and deduplicate incoming tags (case-insensitive)
 	seen := make(map[string]struct{})
 	applyTags := []string{}
@@ -38,7 +38,7 @@ func SetMessageTags(id string, tags []string) ([]string, error) {
 	}
 
 	// Fetch existing tags once and index by lowercase name for O(1) lookup
-	currentTags := getMessageTags(id)
+	currentTags := getMessageTags(ctx, id)
 	currentSet := make(map[string]struct{}, len(currentTags))
 	for _, t := range currentTags {
 		currentSet[strings.ToLower(t)] = struct{}{}
@@ -56,7 +56,7 @@ func SetMessageTags(id string, tags []string) ([]string, error) {
 		if _, exists := currentSet[strings.ToLower(t)]; exists {
 			continue
 		}
-		name, err := addMessageTag(id, t)
+		name, err := addMessageTag(ctx, id, t)
 		if err != nil {
 			return []string{}, err
 		}
@@ -71,7 +71,7 @@ func SetMessageTags(id string, tags []string) ([]string, error) {
 		}
 	}
 	if len(toDelete) > 0 {
-		if err := deleteMessageTags(id, toDelete); err != nil {
+		if err := deleteMessageTags(ctx, id, toDelete); err != nil {
 			return []string{}, err
 		}
 	}
@@ -87,84 +87,99 @@ func SetMessageTags(id string, tags []string) ([]string, error) {
 }
 
 // AddMessageTag adds a tag to a message
-func addMessageTag(id, name string) (string, error) {
-	// Ensure the tag row exists; the UNIQUE index on Name makes concurrent inserts safe
-	if _, err := db.Exec(fmt.Sprintf(`INSERT INTO %s (Name) VALUES ($1) ON CONFLICT (SandboxID, Name) DO NOTHING`, tenant("tags")), name); err != nil { // #nosec
-		return name, err
-	}
-
+func addMessageTag(ctx context.Context, id, name string) (string, error) {
 	var tagID int
 	var foundName string
+	var exists int
 
-	if err := sqlf.From(tenant("tags")).
-		Select("ID").To(&tagID).
-		Select("Name").To(&foundName).
-		Where("Name = ?", name).
-		QueryRowAndClose(context.TODO(), db); err != nil {
+	err := withScope(ctx, func(ex sqlf.Executor) error {
+		// Ensure the tag row exists; the UNIQUE (SandboxID, Name) index makes this safe.
+		if _, err := ex.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s (Name) VALUES ($1) ON CONFLICT (SandboxID, Name) DO NOTHING`, tenant("tags")), name); err != nil { // #nosec
+			return err
+		}
+
+		if err := sqlf.From(tenant("tags")).
+			Select("ID").To(&tagID).
+			Select("Name").To(&foundName).
+			Where("Name = ?", name).
+			QueryRowAndClose(ctx, ex); err != nil {
+			return err
+		}
+
+		// Check message does not already have this tag
+		if err := sqlf.From(tenant("message_tags")).
+			Select("COUNT(ID)").To(&exists).
+			Where("ID = ?", id).
+			Where("TagID = ?", tagID).
+			QueryRowAndClose(ctx, ex); err != nil {
+			return err
+		}
+		if exists > 0 {
+			return nil
+		}
+
+		logger.Log().Debugf("[tags] adding tag \"%s\" to %s", name, id)
+
+		_, err := sqlf.InsertInto(tenant("message_tags")).
+			Set("ID", id).
+			Set("TagID", tagID).
+			ExecAndClose(ctx, ex)
+		return err
+	})
+
+	if err != nil {
 		return name, err
 	}
 
-	// Check message does not already have this tag
-	var exists int
-	if err := sqlf.From(tenant("message_tags")).
-		Select("COUNT(ID)").To(&exists).
-		Where("ID = ?", id).
-		Where("TagID = ?", tagID).
-		QueryRowAndClose(context.Background(), db); err != nil {
-		return "", err
-	}
-	if exists > 0 {
-		return foundName, nil
-	}
-
-	logger.Log().Debugf("[tags] adding tag \"%s\" to %s", name, id)
-
-	_, err := sqlf.InsertInto(tenant("message_tags")).
-		Set("ID", id).
-		Set("TagID", tagID).
-		ExecAndClose(context.TODO(), db)
-
-	return foundName, err
+	return foundName, nil
 }
 
 // deleteMessageTags deletes multiple tags from a message in a single query
-func deleteMessageTags(id string, names []string) error {
+func deleteMessageTags(ctx context.Context, id string, names []string) error {
 	query := fmt.Sprintf(
 		`DELETE FROM %s WHERE ID = $1 AND TagID IN (SELECT ID FROM %s WHERE Name = ANY($2))`,
 		tenant("message_tags"), tenant("tags"),
 	) // #nosec
 
-	if _, err := db.Exec(query, id, names); err != nil {
+	if err := withScope(ctx, func(ex sqlf.Executor) error {
+		_, err := ex.ExecContext(ctx, query, id, names)
+		return err
+	}); err != nil {
 		return err
 	}
 
-	return pruneUnusedTags()
+	return pruneUnusedTags(ctx)
 }
 
 // DeleteMessageTag deletes a tag from a message
-func deleteMessageTag(id, name string) error {
-	if _, err := sqlf.DeleteFrom(tenant("message_tags")).
-		Where(tenant("message_tags.ID")+" = ?", id).
-		Where(tenant("message_tags.Key")+` IN (SELECT Key FROM `+tenant("message_tags")+` LEFT JOIN `+tenant("tags")+` ON TagID=`+tenant("tags.ID")+` WHERE Name = ?)`, name).
-		ExecAndClose(context.TODO(), db); err != nil {
+func deleteMessageTag(ctx context.Context, id, name string) error {
+	if err := withScope(ctx, func(ex sqlf.Executor) error {
+		_, err := sqlf.DeleteFrom(tenant("message_tags")).
+			Where(tenant("message_tags.ID")+" = ?", id).
+			Where(tenant("message_tags.Key")+` IN (SELECT Key FROM `+tenant("message_tags")+` LEFT JOIN `+tenant("tags")+` ON TagID=`+tenant("tags.ID")+` WHERE Name = ?)`, name).
+			ExecAndClose(ctx, ex)
+		return err
+	}); err != nil {
 		return err
 	}
 
-	return pruneUnusedTags()
+	return pruneUnusedTags(ctx)
 }
 
 // GetAllTags returns all used tags
-func GetAllTags() []string {
+func GetAllTags(ctx context.Context) []string {
 	var tags = []string{}
 	var name string
 
-	if err := sqlf.
-		Select(`DISTINCT Name`).
-		From(tenant("tags")).To(&name).
-		OrderBy("Name").
-		QueryAndClose(context.TODO(), db, func(_ *sql.Rows) {
-			tags = append(tags, name)
-		}); err != nil {
+	if err := withScope(ctx, func(ex sqlf.Executor) error {
+		return sqlf.
+			Select(`DISTINCT Name`).
+			From(tenant("tags")).To(&name).
+			OrderBy("Name").
+			QueryAndClose(ctx, ex, func(_ *sql.Rows) {
+				tags = append(tags, name)
+			})
+	}); err != nil {
 		logger.Log().Errorf("[db] %s", err.Error())
 	}
 
@@ -172,21 +187,23 @@ func GetAllTags() []string {
 }
 
 // GetAllTagsCount returns all used tags with their total messages
-func GetAllTagsCount() map[string]int64 {
+func GetAllTagsCount(ctx context.Context) map[string]int64 {
 	var tags = make(map[string]int64)
 	var name string
 	var total float64 // use float64 for rqlite compatibility
 
-	if err := sqlf.
-		Select(`Name`).To(&name).
-		Select(`COUNT(`+tenant("message_tags.TagID")+`) as total`).To(&total).
-		From(tenant("tags")).
-		LeftJoin(tenant("message_tags"), tenant("tags.ID")+" = "+tenant("message_tags.TagID")).
-		GroupBy(tenant("message_tags.TagID")).
-		OrderBy("Name").
-		QueryAndClose(context.TODO(), db, func(_ *sql.Rows) {
-			tags[name] = int64(total)
-		}); err != nil {
+	if err := withScope(ctx, func(ex sqlf.Executor) error {
+		return sqlf.
+			Select(`Name`).To(&name).
+			Select(`COUNT(`+tenant("message_tags.TagID")+`) as total`).To(&total).
+			From(tenant("tags")).
+			LeftJoin(tenant("message_tags"), tenant("tags.ID")+" = "+tenant("message_tags.TagID")).
+			GroupBy(tenant("message_tags.TagID")).
+			OrderBy("Name").
+			QueryAndClose(ctx, ex, func(_ *sql.Rows) {
+				tags[name] = int64(total)
+			})
+	}); err != nil {
 		logger.Log().Errorf("[db] %s", err.Error())
 	}
 
@@ -194,7 +211,7 @@ func GetAllTagsCount() map[string]int64 {
 }
 
 // RenameTag renames a tag
-func RenameTag(from, to string) error {
+func RenameTag(ctx context.Context, from, to string) error {
 	to = tools.CleanTag(to)
 	if to == "" || !config.ValidTagRegexp.MatchString(to) {
 		return fmt.Errorf("invalid tag name: %s", to)
@@ -204,106 +221,105 @@ func RenameTag(from, to string) error {
 		return nil // ignore
 	}
 
-	var id, existsID int
+	return withScope(ctx, func(ex sqlf.Executor) error {
+		var id, existsID int
 
-	q := sqlf.From(tenant("tags")).
-		Select(`ID`).To(&id).
-		Where(`Name = ?`, from).
-		Limit(1)
-	err := q.QueryRowAndClose(context.Background(), db)
-	if err != nil {
-		return fmt.Errorf("tag not found: %s", from)
-	}
+		if err := sqlf.From(tenant("tags")).
+			Select(`ID`).To(&id).
+			Where(`Name = ?`, from).
+			Limit(1).
+			QueryRowAndClose(ctx, ex); err != nil {
+			return fmt.Errorf("tag not found: %s", from)
+		}
 
-	// check if another tag by this name already exists
-	q = sqlf.From(tenant("tags")).
-		Select("ID").To(&existsID).
-		Where(`Name = ?`, to).
-		Where(`ID != ?`, id).
-		Limit(1)
-	err = q.QueryRowAndClose(context.Background(), db)
-	if err == nil || existsID != 0 {
-		return fmt.Errorf("tag already exists: %s", to)
-	}
+		// check if another tag by this name already exists
+		err := sqlf.From(tenant("tags")).
+			Select("ID").To(&existsID).
+			Where(`Name = ?`, to).
+			Where(`ID != ?`, id).
+			Limit(1).
+			QueryRowAndClose(ctx, ex)
+		if err == nil || existsID != 0 {
+			return fmt.Errorf("tag already exists: %s", to)
+		}
 
-	q = sqlf.Update(tenant("tags")).
-		Set("Name", to).
-		Where("ID = ?", id)
-	_, err = q.ExecAndClose(context.Background(), db)
-
-	return err
+		_, err = sqlf.Update(tenant("tags")).
+			Set("Name", to).
+			Where("ID = ?", id).
+			ExecAndClose(ctx, ex)
+		return err
+	})
 }
 
 // DeleteTag deleted a tag and removed all references to the tag
-func DeleteTag(tag string) error {
-	var id int
+func DeleteTag(ctx context.Context, tag string) error {
+	return withScope(ctx, func(ex sqlf.Executor) error {
+		var id int
 
-	q := sqlf.From(tenant("tags")).
-		Select(`ID`).To(&id).
-		Where(`Name = ?`, tag).
-		Limit(1)
-	err := q.QueryRowAndClose(context.Background(), db)
-	if err != nil {
-		return fmt.Errorf("tag not found: %s", tag)
-	}
+		if err := sqlf.From(tenant("tags")).
+			Select(`ID`).To(&id).
+			Where(`Name = ?`, tag).
+			Limit(1).
+			QueryRowAndClose(ctx, ex); err != nil {
+			return fmt.Errorf("tag not found: %s", tag)
+		}
 
-	// delete all references
-	q = sqlf.DeleteFrom(tenant("message_tags")).
-		Where(`TagID = ?`, id)
-	_, err = q.ExecAndClose(context.Background(), db)
-	if err != nil {
-		return fmt.Errorf("error deleting tag references: %s", err.Error())
-	}
+		// delete all references
+		if _, err := sqlf.DeleteFrom(tenant("message_tags")).
+			Where(`TagID = ?`, id).
+			ExecAndClose(ctx, ex); err != nil {
+			return fmt.Errorf("error deleting tag references: %s", err.Error())
+		}
 
-	// delete tag
-	q = sqlf.DeleteFrom(tenant("tags")).
-		Where(`ID = ?`, id)
-	_, err = q.ExecAndClose(context.Background(), db)
-	if err != nil {
-		return fmt.Errorf("error deleting tag: %s", err.Error())
-	}
+		// delete tag
+		if _, err := sqlf.DeleteFrom(tenant("tags")).
+			Where(`ID = ?`, id).
+			ExecAndClose(ctx, ex); err != nil {
+			return fmt.Errorf("error deleting tag: %s", err.Error())
+		}
 
-	return nil
+		return nil
+	})
 }
 
 // PruneUnusedTags will delete all unused tags from the database
-func pruneUnusedTags() error {
-	q := sqlf.From(tenant("tags")).
-		Select(tenant("tags.ID")+", "+tenant("tags.Name")+", COUNT("+tenant("message_tags.ID")+") as COUNT").
-		LeftJoin(tenant("message_tags"), tenant("tags.ID")+" = "+tenant("message_tags.TagID")).
-		GroupBy(tenant("tags.ID"))
+func pruneUnusedTags(ctx context.Context) error {
+	return withScope(ctx, func(ex sqlf.Executor) error {
+		q := sqlf.From(tenant("tags")).
+			Select(tenant("tags.ID")+", "+tenant("tags.Name")+", COUNT("+tenant("message_tags.ID")+") as COUNT").
+			LeftJoin(tenant("message_tags"), tenant("tags.ID")+" = "+tenant("message_tags.TagID")).
+			GroupBy(tenant("tags.ID"))
 
-	toDel := []int{}
+		toDel := []int{}
 
-	if err := q.QueryAndClose(context.TODO(), db, func(row *sql.Rows) {
-		var n string
-		var id int
-		var c int
+		if err := q.QueryAndClose(ctx, ex, func(row *sql.Rows) {
+			var n string
+			var id int
+			var c int
 
-		if err := row.Scan(&id, &n, &c); err != nil {
-			logger.Log().Errorf("[tags] %s", err.Error())
-			return
+			if err := row.Scan(&id, &n, &c); err != nil {
+				logger.Log().Errorf("[tags] %s", err.Error())
+				return
+			}
+
+			if c == 0 {
+				logger.Log().Debugf("[tags] deleting unused tag \"%s\"", n)
+				toDel = append(toDel, id)
+			}
+		}); err != nil {
+			return err
 		}
 
-		if c == 0 {
-			logger.Log().Debugf("[tags] deleting unused tag \"%s\"", n)
-			toDel = append(toDel, id)
-		}
-	}); err != nil {
-		return err
-	}
-
-	if len(toDel) > 0 {
 		for _, id := range toDel {
 			if _, err := sqlf.DeleteFrom(tenant("tags")).
 				Where("ID = ?", id).
-				ExecAndClose(context.TODO(), db); err != nil {
+				ExecAndClose(ctx, ex); err != nil {
 				return err
 			}
 		}
-	}
 
-	return nil
+		return nil
+	})
 }
 
 // Find tags set via --tags in raw message, useful for matching all headers etc.
@@ -392,19 +408,21 @@ func getTagsForIDs(ctx context.Context, ids []string) map[string][]string {
 
 // Get message tags from the database for a given database ID
 // Used when parsing a raw email.
-func getMessageTags(id string) []string {
+func getMessageTags(ctx context.Context, id string) []string {
 	tags := []string{}
 	var name string
 
-	if err := sqlf.
-		Select(`Name`).To(&name).
-		From(tenant("Tags")).
-		LeftJoin(tenant("message_tags"), tenant("Tags.ID")+"="+tenant("message_tags.TagID")).
-		Where(tenant("message_tags.ID")+` = ?`, id).
-		OrderBy("Name").
-		QueryAndClose(context.TODO(), db, func(_ *sql.Rows) {
-			tags = append(tags, name)
-		}); err != nil {
+	if err := withScope(ctx, func(ex sqlf.Executor) error {
+		return sqlf.
+			Select(`Name`).To(&name).
+			From(tenant("Tags")).
+			LeftJoin(tenant("message_tags"), tenant("Tags.ID")+"="+tenant("message_tags.TagID")).
+			Where(tenant("message_tags.ID")+` = ?`, id).
+			OrderBy("Name").
+			QueryAndClose(ctx, ex, func(_ *sql.Rows) {
+				tags = append(tags, name)
+			})
+	}); err != nil {
 		logger.Log().Errorf("[tags] %s", err.Error())
 		return tags
 	}

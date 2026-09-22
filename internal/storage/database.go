@@ -147,7 +147,7 @@ func StatsGet() MailboxStats {
 	var (
 		total  = CountTotal()
 		unread = CountUnread()
-		tags   = GetAllTags()
+		tags   = GetAllTags(context.Background())
 	)
 
 	dbLastAction = time.Now()

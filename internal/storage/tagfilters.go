@@ -57,7 +57,7 @@ func LoadTagFilters() {
 }
 
 // TagFilterMatches returns a slice of matching tags from a message
-func tagFilterMatches(id string) []string {
+func tagFilterMatches(ctx context.Context, id string) []string {
 	tags := []string{}
 
 	if len(tagFilters) == 0 {
@@ -67,13 +67,15 @@ func tagFilterMatches(id string) []string {
 	for _, f := range tagFilters {
 		var matchID string
 		q := f.SQL.Clone().Where("ID = ?", id)
-		if err := q.QueryAndClose(context.Background(), db, func(row *sql.Rows) {
-			var ignore sql.NullString
+		if err := withScope(ctx, func(ex sqlf.Executor) error {
+			return q.QueryAndClose(ctx, ex, func(row *sql.Rows) {
+				var ignore sql.NullString
 
-			if err := row.Scan(&ignore, &matchID, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore); err != nil {
-				logger.Log().Errorf("[db] %s", err.Error())
-				return
-			}
+				if err := row.Scan(&ignore, &matchID, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore, &ignore); err != nil {
+					logger.Log().Errorf("[db] %s", err.Error())
+					return
+				}
+			})
 		}); err != nil {
 			logger.Log().Errorf("[db] %s", err.Error())
 			return tags

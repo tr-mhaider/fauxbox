@@ -21,7 +21,7 @@ import (
 // The search is broken up by segments (exact phrases can be quoted), and interprets specific terms such as:
 // is:read, is:unread, has:attachment, to:<term>, from:<term> & subject:<term>
 // Negative searches also also included by prefixing the search term with a `-` or `!`
-func Search(search, timezone string, start int, beforeTS int64, limit int) ([]MessageSummary, int, error) {
+func Search(ctx context.Context, search, timezone string, start int, beforeTS int64, limit int) ([]MessageSummary, int, error) {
 	results := []MessageSummary{}
 	allResults := []MessageSummary{}
 	tsStart := time.Now()
@@ -38,7 +38,8 @@ func Search(search, timezone string, start int, beforeTS int64, limit int) ([]Me
 
 	var err error
 
-	if err := q.QueryAndClose(context.TODO(), db, func(row *sql.Rows) {
+	if err := withScope(ctx, func(ex sqlf.Executor) error {
+		return q.QueryAndClose(ctx, ex, func(row *sql.Rows) {
 		var created float64 // use float64 for rqlite compatibility
 		var id string
 		var messageID string
@@ -70,7 +71,8 @@ func Search(search, timezone string, start int, beforeTS int64, limit int) ([]Me
 		em.Read = read == 1
 		em.Snippet = snippet
 
-		allResults = append(allResults, em)
+			allResults = append(allResults, em)
+		})
 	}); err != nil {
 		return results, nrResults, err
 	}
@@ -91,7 +93,7 @@ func Search(search, timezone string, start int, beforeTS int64, limit int) ([]Me
 		for i, m := range results {
 			ids[i] = m.ID
 		}
-		tagMap := getTagsForIDs(context.Background(), ids)
+		tagMap := getTagsForIDs(ctx, ids)
 		for i, m := range results {
 			if tags, ok := tagMap[m.ID]; ok {
 				results[i].Tags = tags
@@ -110,7 +112,7 @@ func Search(search, timezone string, start int, beforeTS int64, limit int) ([]Me
 
 // SearchUnreadCount returns the number of unread messages matching a search.
 // This is run one at a time to allow connected browsers to be updated.
-func SearchUnreadCount(search, timezone string, beforeTS int64) (int64, error) {
+func SearchUnreadCount(ctx context.Context, search, timezone string, beforeTS int64) (int64, error) {
 	tsStart := time.Now()
 
 	q := searchQueryBuilder(search, timezone)
@@ -125,8 +127,10 @@ func SearchUnreadCount(search, timezone string, beforeTS int64) (int64, error) {
 
 	q = q.Where("Read = 0")
 
-	err := q.QueryAndClose(context.TODO(), db, func(_ *sql.Rows) {
-		unread++
+	err := withScope(ctx, func(ex sqlf.Executor) error {
+		return q.QueryAndClose(ctx, ex, func(_ *sql.Rows) {
+			unread++
+		})
 	})
 
 	dbLastAction = time.Now()
@@ -142,31 +146,33 @@ func SearchUnreadCount(search, timezone string, beforeTS int64) (int64, error) {
 // The search is broken up by segments (exact phrases can be quoted), and interprets specific terms such as:
 // is:read, is:unread, has:attachment, to:<term>, from:<term> & subject:<term>
 // Negative searches also also included by prefixing the search term with a `-` or `!`
-func DeleteSearch(search, timezone string) error {
+func DeleteSearch(ctx context.Context, search, timezone string) error {
 	q := searchQueryBuilder(search, timezone)
 
 	ids := []string{}
 	deleteSize := uint64(0)
 
-	if err := q.QueryAndClose(context.TODO(), db, func(row *sql.Rows) {
-		var created float64 // use float64 for rqlite compatibility
-		var id string
-		var messageID string
-		var subject string
-		var metadata string
-		var size float64 // use float64 for rqlite compatibility
-		var attachments int
-		var read int
-		var snippet string
-		var ignore string
+	if err := withScope(ctx, func(ex sqlf.Executor) error {
+		return q.QueryAndClose(ctx, ex, func(row *sql.Rows) {
+			var created float64 // use float64 for rqlite compatibility
+			var id string
+			var messageID string
+			var subject string
+			var metadata string
+			var size float64 // use float64 for rqlite compatibility
+			var attachments int
+			var read int
+			var snippet string
+			var ignore string
 
-		if err := row.Scan(&created, &id, &messageID, &subject, &metadata, &size, &attachments, &read, &snippet, &ignore, &ignore, &ignore, &ignore, &ignore); err != nil {
-			logger.Log().Errorf("[db] %s", err.Error())
-			return
-		}
+			if err := row.Scan(&created, &id, &messageID, &subject, &metadata, &size, &attachments, &read, &snippet, &ignore, &ignore, &ignore, &ignore, &ignore); err != nil {
+				logger.Log().Errorf("[db] %s", err.Error())
+				return
+			}
 
-		ids = append(ids, id)
-		deleteSize = deleteSize + uint64(size)
+			ids = append(ids, id)
+			deleteSize = deleteSize + uint64(size)
+		})
 	}); err != nil {
 		return err
 	}
@@ -174,51 +180,31 @@ func DeleteSearch(search, timezone string) error {
 	if len(ids) > 0 {
 		total := len(ids)
 
-		// split ids into chunks of 1000 ids
+		// split ids into chunks of 1000 without mutating ids
 		var chunks [][]string
-		if total > 1000 {
-			chunkSize := 1000
-			chunks = make([][]string, 0, (len(ids)+chunkSize-1)/chunkSize)
-			for chunkSize < len(ids) {
-				ids, chunks = ids[chunkSize:], append(chunks, ids[0:chunkSize:chunkSize])
-			}
-			if len(ids) > 0 {
-				// add remaining ids <= 1000
-				chunks = append(chunks, ids)
-			}
-		} else {
-			chunks = append(chunks, ids)
+		for i := 0; i < len(ids); i += 1000 {
+			end := min(i+1000, len(ids))
+			chunks = append(chunks, ids[i:end])
 		}
 
-		// begin a transaction to ensure both the message
-		// and data are deleted successfully
-		tx, err := db.BeginTx(context.Background(), nil)
-		if err != nil {
+		if err := withScope(ctx, func(ex sqlf.Executor) error {
+			for _, chunk := range chunks {
+				if _, err := ex.ExecContext(ctx, `DELETE FROM `+tenant("mailbox")+` WHERE ID = ANY($1)`, chunk); err != nil {
+					return err
+				}
+				if _, err := ex.ExecContext(ctx, `DELETE FROM `+tenant("mailbox_data")+` WHERE ID = ANY($1)`, chunk); err != nil {
+					return err
+				}
+				if _, err := ex.ExecContext(ctx, `DELETE FROM `+tenant("message_tags")+` WHERE ID = ANY($1)`, chunk); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
 
-		// roll back if it fails
-		defer func() { _ = tx.Rollback() }()
-
-		for _, ids := range chunks {
-			if _, err = tx.Exec(`DELETE FROM `+tenant("mailbox")+` WHERE ID = ANY($1)`, ids); err != nil {
-				return err
-			}
-
-			if _, err = tx.Exec(`DELETE FROM `+tenant("mailbox_data")+` WHERE ID = ANY($1)`, ids); err != nil {
-				return err
-			}
-
-			if _, err = tx.Exec(`DELETE FROM `+tenant("message_tags")+` WHERE ID = ANY($1)`, ids); err != nil {
-				return err
-			}
-		}
-
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-
-		if err := pruneUnusedTags(); err != nil {
+		if err := pruneUnusedTags(ctx); err != nil {
 			return err
 		}
 
@@ -227,7 +213,7 @@ func DeleteSearch(search, timezone string) error {
 		dbLastAction = time.Now()
 
 		// broadcast changes
-		if len(ids) > 200 {
+		if total > 200 {
 			websockets.Broadcast("prune", nil)
 		} else {
 			for _, id := range ids {
@@ -249,12 +235,13 @@ func DeleteSearch(search, timezone string) error {
 }
 
 // SetSearchReadStatus marks all messages matching the search as read or unread
-func SetSearchReadStatus(search, timezone string, read bool) error {
+func SetSearchReadStatus(ctx context.Context, search, timezone string, read bool) error {
 	q := searchQueryBuilder(search, timezone).Where("Read = ?", !read)
 
 	ids := []string{}
 
-	if err := q.QueryAndClose(context.TODO(), db, func(row *sql.Rows) {
+	if err := withScope(ctx, func(ex sqlf.Executor) error {
+		return q.QueryAndClose(ctx, ex, func(row *sql.Rows) {
 		var created float64 // use float64 for rqlite compatibility
 		var id string
 		var messageID string
@@ -271,17 +258,18 @@ func SetSearchReadStatus(search, timezone string, read bool) error {
 			return
 		}
 
-		ids = append(ids, id)
+			ids = append(ids, id)
+		})
 	}); err != nil {
 		return err
 	}
 
 	if read {
-		if err := MarkRead(ids); err != nil {
+		if err := MarkRead(ctx, ids); err != nil {
 			return err
 		}
 	} else {
-		if err := MarkUnread(ids); err != nil {
+		if err := MarkUnread(ctx, ids); err != nil {
 			return err
 		}
 	}

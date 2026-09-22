@@ -55,11 +55,13 @@ func ReindexAll() {
 
 	parser := enmime.NewParser(enmime.DisableCharacterDetection(true), enmime.MaxMIMEParts(500))
 
+	bypass := WithBypass(context.Background())
+
 	for _, ids := range chunks {
 		updates := []updateStruct{}
 
 		for _, id := range ids {
-			raw, err := GetMessageRaw(id)
+			raw, err := GetMessageRaw(bypass, id)
 			if err != nil {
 				logger.Log().Error(err)
 				continue
@@ -73,7 +75,7 @@ func ReindexAll() {
 				continue
 			}
 
-			meta, _ := GetMetadata(id)
+			meta, _ := GetMetadata(bypass, id)
 
 			fromJSON := addressToSlice(env, "From")
 			if len(fromJSON) > 0 {
