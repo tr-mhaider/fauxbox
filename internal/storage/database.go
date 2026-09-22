@@ -87,6 +87,13 @@ func InitDB() error {
 	// sqlf uses ? placeholders by default; PostgreSQL requires $N.
 	sqlf.SetDialect(sqlf.PostgreSQL)
 
+	// Ensure the non-owner role that Row-Level Security policies apply to exists.
+	// Requires CREATEROLE/superuser; on managed databases without it, the role
+	// should be pre-created by an operator (the schema grants then succeed).
+	if _, err := db.Exec(`DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '` + rlsRole + `') THEN CREATE ROLE ` + rlsRole + ` NOLOGIN; END IF; END $$;`); err != nil {
+		logger.Log().Warnf("[db] could not ensure RLS role %q exists (pre-create it if this persists): %s", rlsRole, err.Error())
+	}
+
 	// create tables if necessary & apply migrations
 	if err := dbApplySchemas(); err != nil {
 		return err

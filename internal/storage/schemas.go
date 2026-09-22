@@ -119,7 +119,18 @@ func dbApplySchemas() error {
 // The pgx extended protocol rejects multiple commands in a single Exec, so we
 // split on ";" (safe here as the schema files contain no semicolons in literals).
 func execStatements(script string) error {
-	for _, stmt := range strings.Split(script, ";") {
+	// Strip "--" line comments first so semicolons inside them do not split
+	// statements. The schema files contain no "--" inside string literals.
+	var clean strings.Builder
+	for _, line := range strings.Split(script, "\n") {
+		if i := strings.Index(line, "--"); i >= 0 {
+			line = line[:i]
+		}
+		clean.WriteString(line)
+		clean.WriteString("\n")
+	}
+
+	for _, stmt := range strings.Split(clean.String(), ";") {
 		s := strings.TrimSpace(stmt)
 		if s == "" {
 			continue

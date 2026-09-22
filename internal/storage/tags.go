@@ -89,7 +89,7 @@ func SetMessageTags(id string, tags []string) ([]string, error) {
 // AddMessageTag adds a tag to a message
 func addMessageTag(id, name string) (string, error) {
 	// Ensure the tag row exists; the UNIQUE index on Name makes concurrent inserts safe
-	if _, err := db.Exec(fmt.Sprintf(`INSERT INTO %s (Name) VALUES ($1) ON CONFLICT (Name) DO NOTHING`, tenant("tags")), name); err != nil { // #nosec
+	if _, err := db.Exec(fmt.Sprintf(`INSERT INTO %s (Name) VALUES ($1) ON CONFLICT (SandboxID, Name) DO NOTHING`, tenant("tags")), name); err != nil { // #nosec
 		return name, err
 	}
 
