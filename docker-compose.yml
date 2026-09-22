@@ -1,0 +1,52 @@
+# Local development stack for Fauxbox multi-tenant.
+# Phase 0: brings up Postgres, the API, and a placeholder Next.js web app.
+# The API still uses its own temporary store until the Phase 1 Postgres port;
+# DATABASE_URL is wired now so Phase 1 only needs a code change, not compose changes.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fauxbox}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fauxbox}
+      POSTGRES_DB: ${POSTGRES_DB:-fauxbox}
+    ports:
+      - "5432:5432"
+    volumes:
+      - fauxbox_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fauxbox} -d ${POSTGRES_DB:-fauxbox}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://fauxbox:fauxbox@db:5432/fauxbox?sslmode=disable}
+      MP_UI_BIND_ADDR: "[::]:8025"
+      MP_SMTP_BIND_ADDR: "[::]:1025"
+      MP_POP3_BIND_ADDR: "[::]:1110"
+    ports:
+      - "8025:8025" # web API
+      - "1025:1025" # SMTP
+      - "1110:1110" # POP3
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    depends_on:
+      - api
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8025}
+    ports:
+      - "3000:3000"
+
+volumes:
+  fauxbox_pgdata:

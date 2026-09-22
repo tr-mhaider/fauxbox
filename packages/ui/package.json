@@ -1,0 +1,6 @@
+{
+  "name": "@fauxbox/ui",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared design system for the Fauxbox app package (populated in Phase 8)"
+}
