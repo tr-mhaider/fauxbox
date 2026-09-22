@@ -413,6 +413,12 @@ func initConfigFromEnv() {
 
 	// Demo mode
 	config.DemoMode = getEnabledFromEnv("MP_DEMO_MODE")
+
+	// Auth (Phase 3): JWT signing secret
+	config.JWTSecret = os.Getenv("MP_JWT_SECRET")
+	if config.JWTSecret == "" {
+		config.JWTSecret = os.Getenv("JWT_SECRET")
+	}
 }
 
 // load deprecated settings from environment and warn

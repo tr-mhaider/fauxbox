@@ -13,6 +13,7 @@ import (
 
 	"github.com/axllent/ghru/v2"
 	"github.com/axllent/mailpit/internal/auth"
+	"github.com/axllent/mailpit/internal/identity"
 	"github.com/axllent/mailpit/internal/logger"
 	"github.com/axllent/mailpit/internal/smtpd/chaos"
 	"github.com/axllent/mailpit/internal/snakeoil"
@@ -244,6 +245,9 @@ var (
 
 	// DemoMode disables SMTP relay, link checking & HTTP send functionality
 	DemoMode = false
+
+	// JWTSecret signs dashboard access & refresh tokens (Phase 3 auth)
+	JWTSecret string
 )
 
 // AutoTag struct for auto-tagging
@@ -662,6 +666,12 @@ func VerifyConfig() error {
 		// this deserves a warning
 		logger.Log().Info("demo mode enabled")
 	}
+
+	// configure JWT signing for dashboard authentication
+	if JWTSecret == "" {
+		logger.Log().Warn("[auth] no JWT secret set (MP_JWT_SECRET); dashboard tokens are insecure")
+	}
+	identity.Configure(JWTSecret, 0, 0)
 
 	return nil
 }
