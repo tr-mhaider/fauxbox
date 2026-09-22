@@ -71,3 +71,22 @@ func BumpTokenVersion(id string) error {
 	_, err := db.Exec(`UPDATE `+tenant("users")+` SET TokenVersion = TokenVersion + 1 WHERE ID = $1`, id)
 	return err
 }
+
+// ListUsersByAccount returns the members of an account (without password hashes).
+func ListUsersByAccount(accountID string) ([]User, error) {
+	rows, err := db.Query(`SELECT ID, AccountID, Email, Role, TokenVersion FROM `+tenant("users")+` WHERE AccountID = $1 ORDER BY Email`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	users := []User{}
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.AccountID, &u.Email, &u.Role, &u.TokenVersion); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}

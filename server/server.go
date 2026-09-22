@@ -229,6 +229,13 @@ func apiRoutes() *http.ServeMux {
 	r.HandleFunc("POST "+config.Webroot+"api/v1/auth/login", middleWareFunc(apiv1.Login))
 	r.HandleFunc("POST "+config.Webroot+"api/v1/auth/refresh", middleWareFunc(apiv1.Refresh))
 	r.HandleFunc("POST "+config.Webroot+"api/v1/auth/logout", middleWareFunc(apiv1.Logout))
+
+	// Account management (team + API tokens) - account-scoped, no sandbox required
+	r.HandleFunc("GET "+config.Webroot+"api/v1/account/users", middleWareFunc(apiv1.RequireAccount(apiv1.ListAccountUsers)))
+	r.HandleFunc("POST "+config.Webroot+"api/v1/account/users", middleWareFunc(apiv1.RequireAccount(apiv1.CreateAccountUser)))
+	r.HandleFunc("GET "+config.Webroot+"api/v1/account/tokens", middleWareFunc(apiv1.RequireAccount(apiv1.ListAPITokensHandler)))
+	r.HandleFunc("POST "+config.Webroot+"api/v1/account/tokens", middleWareFunc(apiv1.RequireAccount(apiv1.CreateAPITokenHandler)))
+	r.HandleFunc("DELETE "+config.Webroot+"api/v1/account/tokens/{id}", middleWareFunc(apiv1.RequireAccount(apiv1.DeleteAPITokenHandler)))
 	r.HandleFunc("GET "+config.Webroot+"api/v1/tags", middleWareFunc(apiv1.RequireAuth(apiv1.GetAllTags)))
 	r.HandleFunc("PUT "+config.Webroot+"api/v1/tags", middleWareFunc(apiv1.RequireAuth(apiv1.SetMessageTags)))
 	r.HandleFunc("PUT "+config.Webroot+"api/v1/tags/{tag}", middleWareFunc(apiv1.RequireAuth(apiv1.RenameTag)))

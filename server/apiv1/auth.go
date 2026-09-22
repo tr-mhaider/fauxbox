@@ -1,8 +1,10 @@
 package apiv1
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 
@@ -10,6 +12,75 @@ import (
 	"github.com/axllent/mailpit/internal/identity"
 	"github.com/axllent/mailpit/internal/storage"
 )
+
+type authCtxKey int
+
+const accountCtxKey authCtxKey = 0
+
+// AccountFromRequest returns the authenticated account ID, or "" if none.
+func AccountFromRequest(r *http.Request) string {
+	if a, ok := r.Context().Value(accountCtxKey).(string); ok {
+		return a
+	}
+	return ""
+}
+
+// authAccount resolves the account ID for a request from either a user JWT
+// (with a live TokenVersion check) or a programmatic API token.
+func authAccount(r *http.Request) (string, error) {
+	h := r.Header.Get("Authorization")
+	if !strings.HasPrefix(h, "Bearer ") {
+		return "", errors.New("missing bearer token")
+	}
+	token := strings.TrimPrefix(h, "Bearer ")
+
+	if claims, err := identity.ParseToken(token); err == nil && !claims.Refresh {
+		if u, err := storage.GetUserByID(claims.Subject); err == nil && u.TokenVersion == claims.Version {
+			return claims.Account, nil
+		}
+	}
+
+	if acc, _, err := storage.GetAPITokenAccount(token); err == nil {
+		return acc, nil
+	}
+
+	return "", errors.New("invalid token")
+}
+
+// firstHostLabel returns the first DNS label of a host (its subdomain), or ""
+// for an IP or single-label host.
+func firstHostLabel(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if net.ParseIP(host) != nil {
+		return ""
+	}
+	i := strings.Index(host, ".")
+	if i <= 0 {
+		return ""
+	}
+	return host[:i]
+}
+
+// RequireAccount wraps an account-level handler (team, tokens). In single-tenant
+// mode it passes through; in multi-tenant mode it authenticates and injects the
+// account into the request context.
+func RequireAccount(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !config.MultiTenant {
+			next(w, r)
+			return
+		}
+		acc, err := authAccount(r)
+		if err != nil {
+			httpUnauthorized(w, "authentication required")
+			return
+		}
+		next(w, r.WithContext(context.WithValue(r.Context(), accountCtxKey, acc)))
+	}
+}
 
 // tokenResponse is returned by login and refresh.
 type tokenResponse struct {
@@ -44,25 +115,34 @@ func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		claims, err := bearerClaims(r)
+		account, err := authAccount(r)
 		if err != nil {
 			httpUnauthorized(w, "authentication required")
 			return
 		}
 
+		// sandbox from the explicit header, else the request host's subdomain
 		sandboxID := r.Header.Get("X-Sandbox-ID")
 		if sandboxID == "" {
-			httpError(w, "missing X-Sandbox-ID header")
+			if sub := firstHostLabel(r.Host); sub != "" {
+				if sb, err := storage.GetSandboxBySubdomain(sub); err == nil {
+					sandboxID = sb.ID
+				}
+			}
+		}
+		if sandboxID == "" {
+			httpError(w, "missing sandbox (set the X-Sandbox-ID header or use a sandbox subdomain)")
 			return
 		}
 
 		sb, err := storage.GetSandboxByID(sandboxID)
-		if err != nil || sb.AccountID != claims.Account {
+		if err != nil || sb.AccountID != account {
 			httpForbidden(w, "sandbox not found or not permitted")
 			return
 		}
 
-		next(w, r.WithContext(storage.WithSandbox(r.Context(), sandboxID)))
+		ctx := context.WithValue(storage.WithSandbox(r.Context(), sandboxID), accountCtxKey, account)
+		next(w, r.WithContext(ctx))
 	}
 }
 
