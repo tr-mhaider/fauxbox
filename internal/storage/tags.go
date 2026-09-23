@@ -11,7 +11,6 @@ import (
 	"github.com/axllent/mailpit/config"
 	"github.com/axllent/mailpit/internal/logger"
 	"github.com/axllent/mailpit/internal/tools"
-	"github.com/axllent/mailpit/server/websockets"
 	"github.com/leporo/sqlf"
 )
 
@@ -81,7 +80,7 @@ func SetMessageTags(ctx context.Context, id string, tags []string) ([]string, er
 		Tags []string
 	}{ID: id, Tags: applyTags}
 
-	websockets.Broadcast("update", d)
+	broadcastScoped(ctx, "update", d)
 
 	return tagNames, nil
 }

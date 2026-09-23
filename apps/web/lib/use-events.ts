@@ -6,17 +6,19 @@ import type { WSNotification } from "./types";
 // Resolve the websocket URL. In dev the API lives on another origin (the Next
 // rewrite only proxies HTTP, not the WS upgrade), so NEXT_PUBLIC_WS_URL points
 // straight at the Go server. In prod, same-origin /api/events.
-function wsURL(): string {
+function wsURL(sandbox: string): string {
   const override = process.env.NEXT_PUBLIC_WS_URL;
-  if (override) return override;
-  const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${location.host}/api/events`;
+  const base =
+    override ?? `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/events`;
+  const sep = base.includes("?") ? "&" : "?";
+  return `${base}${sep}sandbox=${encodeURIComponent(sandbox)}`;
 }
 
-// Subscribe to the live capture stream. The `/api/events` broadcast is global
-// (not sandbox-scoped server-side yet — tracked for the isolation phase), so the
-// caller filters by the active sandbox. `key` forces a reconnect when it
-// changes, which is how switching sandboxes re-scopes the subscription.
+// Subscribe to the live capture stream for one sandbox. The sandbox id is sent
+// as `?sandbox=` on the connection; the server authorizes it against the session
+// and scopes the event stream to it, so a client only receives its own tenant's
+// events. `key` (the sandbox id) forces a reconnect when it changes, re-scoping
+// the subscription on a sandbox switch.
 export function useEvents(key: string | null, onEvent: (n: WSNotification) => void) {
   const handler = useRef(onEvent);
   handler.current = onEvent;
@@ -29,7 +31,7 @@ export function useEvents(key: string | null, onEvent: (n: WSNotification) => vo
 
     const connect = () => {
       if (closed) return;
-      ws = new WebSocket(wsURL());
+      ws = new WebSocket(wsURL(key));
       ws.onmessage = (e) => {
         try {
           handler.current(JSON.parse(e.data) as WSNotification);

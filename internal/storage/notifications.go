@@ -8,6 +8,19 @@ import (
 	"github.com/axllent/mailpit/server/websockets"
 )
 
+// broadcastScoped sends a websocket event to the clients watching the sandbox
+// in ctx. With a bypass or single-tenant scope it falls back to a global
+// broadcast (every client). This is what keeps one tenant's mail events from
+// reaching another tenant's open UI.
+func broadcastScoped(ctx context.Context, t string, msg any) {
+	s := scopeFromCtx(ctx)
+	if s.bypass || s.sandboxID == "" {
+		websockets.Broadcast(t, msg)
+		return
+	}
+	websockets.BroadcastToSandbox(s.sandboxID, t, msg)
+}
+
 var bcStatsDelay = false
 
 // BroadcastMailboxStats broadcasts the total number of messages

@@ -457,8 +457,45 @@ func viewHandler(w http.ResponseWriter, r *http.Request) {
 // Websocket to broadcast changes.
 // Authentication and CORS are handled by middleWareFunc before this is reached.
 func apiWebsocket(w http.ResponseWriter, r *http.Request) {
-	websockets.ServeWs(websockets.MessageHub, w, r)
+	sandbox, ok := resolveWebsocketSandbox(w, r)
+	if !ok {
+		return // resolveWebsocketSandbox already wrote the error
+	}
+	websockets.ServeWs(websockets.MessageHub, w, r, sandbox)
 	storage.BroadcastMailboxStats()
+}
+
+// resolveWebsocketSandbox decides which sandbox a websocket client may watch.
+// Single-tenant clients see everything (""). Multi-tenant clients name a sandbox
+// via ?sandbox= and must own it (verified from the session cookie); the events
+// stream is then scoped to that sandbox so tenants never see each other's mail.
+func resolveWebsocketSandbox(w http.ResponseWriter, r *http.Request) (string, bool) {
+	if !config.MultiTenant {
+		return "", true
+	}
+
+	sandbox := r.URL.Query().Get("sandbox")
+	if sandbox == "" {
+		http.Error(w, "sandbox query parameter required", http.StatusBadRequest)
+		return "", false
+	}
+
+	if account := apiv1.AccountFromToken(r); account != "" {
+		sb, err := storage.GetSandboxByID(sandbox)
+		if err != nil || sb.AccountID != account {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return "", false
+		}
+		return sandbox, true
+	}
+
+	// No session (e.g. a cross-origin dev websocket where SameSite cookies are
+	// not sent). Only honor the param when explicitly trusted for local dev.
+	if config.WSTrustSandboxParam {
+		return sandbox, true
+	}
+	http.Error(w, "unauthorized", http.StatusUnauthorized)
+	return "", false
 }
 
 // licenseInfo returns structured license information for Mailpit and its third-party dependencies.

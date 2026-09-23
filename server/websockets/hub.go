@@ -15,8 +15,10 @@ type Hub struct {
 	// Registered clients.
 	Clients map[*Client]bool
 
-	// Inbound messages from the clients.
-	Broadcast chan []byte
+	// Inbound messages to fan out. A message carries the sandbox it belongs to
+	// ("" = global) so the hub can deliver it only to clients watching that
+	// sandbox.
+	Broadcast chan wsMessage
 
 	// Register requests from the clients.
 	register chan *Client
@@ -34,10 +36,17 @@ type WebsocketNotification struct {
 	Data any
 }
 
+// wsMessage is a serialized notification tagged with the sandbox it belongs to
+// ("" means a global event delivered to every client).
+type wsMessage struct {
+	sandbox string
+	data    []byte
+}
+
 // NewHub returns a new hub configuration
 func NewHub() *Hub {
 	return &Hub{
-		Broadcast:  make(chan []byte),
+		Broadcast:  make(chan wsMessage),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		Clients:    make(map[*Client]bool),
@@ -62,12 +71,18 @@ func (h *Hub) Run() {
 				h.clientCount.Add(-1)
 			}
 		case message := <-h.Broadcast:
-			prepared, err := websocket.NewPreparedMessage(websocket.TextMessage, message)
+			prepared, err := websocket.NewPreparedMessage(websocket.TextMessage, message.data)
 			if err != nil {
 				logger.Log().Errorf("[websocket] error preparing message: %s", err.Error())
 				continue
 			}
 			for client := range h.Clients {
+				// A sandbox-scoped event reaches only clients watching that
+				// sandbox. A global event (no sandbox), or a client with no
+				// sandbox (single-tenant / sees-all), matches everything.
+				if message.sandbox != "" && client.sandbox != "" && client.sandbox != message.sandbox {
+					continue
+				}
 				select {
 				case client.send <- prepared:
 				default:
@@ -80,23 +95,28 @@ func (h *Hub) Run() {
 	}
 }
 
-// Broadcast will spawn a broadcast message to all connected clients
+// Broadcast sends a global message to every connected client.
 func Broadcast(t string, msg any) {
+	sendToHub("", t, msg)
+}
+
+// BroadcastToSandbox sends a message only to clients watching sandboxID.
+func BroadcastToSandbox(sandboxID, t string, msg any) {
+	sendToHub(sandboxID, t, msg)
+}
+
+func sendToHub(sandbox, t string, msg any) {
 	if MessageHub == nil || MessageHub.clientCount.Load() == 0 {
 		return
 	}
 
-	w := WebsocketNotification{}
-	w.Type = t
-	w.Data = msg
-	b, err := json.Marshal(w)
-
+	b, err := json.Marshal(WebsocketNotification{Type: t, Data: msg})
 	if err != nil {
 		logger.Log().Errorf("[websocket] broadcast received invalid data: %s", err.Error())
 		return
 	}
 
-	go func() { MessageHub.Broadcast <- b }()
+	go func() { MessageHub.Broadcast <- wsMessage{sandbox: sandbox, data: b} }()
 }
 
 // BroadCastClientError is a wrapper to broadcast client errors to the web UI

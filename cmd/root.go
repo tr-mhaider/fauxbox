@@ -421,6 +421,7 @@ func initConfigFromEnv() {
 	}
 	config.MultiTenant = getEnabledFromEnv("MP_MULTI_TENANT")
 	config.AdminToken = os.Getenv("MP_ADMIN_TOKEN")
+	config.WSTrustSandboxParam = getEnabledFromEnv("MP_WS_TRUST_SANDBOX_PARAM")
 }
 
 // load deprecated settings from environment and warn

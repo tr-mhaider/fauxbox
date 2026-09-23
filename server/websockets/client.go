@@ -61,6 +61,10 @@ type Client struct {
 
 	// Buffered channel of outbound messages.
 	send chan *websocket.PreparedMessage
+
+	// sandbox scopes which events this client receives ("" = all, for
+	// single-tenant or sees-all clients).
+	sandbox string
 }
 
 // ReadPump is used here solely to monitor the connection, not to actually receive messages.
@@ -116,7 +120,7 @@ func (c *Client) writePump() {
 }
 
 // ServeWs handles websocket requests from the peer.
-func ServeWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
+func ServeWs(hub *Hub, w http.ResponseWriter, r *http.Request, sandbox string) {
 	if auth.UICredentials != nil {
 		user, pass, ok := r.BasicAuth()
 
@@ -137,7 +141,7 @@ func ServeWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := &Client{hub: hub, conn: conn, send: make(chan *websocket.PreparedMessage, 256)}
+	client := &Client{hub: hub, conn: conn, send: make(chan *websocket.PreparedMessage, 256), sandbox: sandbox}
 	client.hub.register <- client
 
 	// Allow collection of memory referenced by the caller by doing all work in new goroutines.

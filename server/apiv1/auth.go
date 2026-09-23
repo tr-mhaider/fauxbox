@@ -35,6 +35,17 @@ func AccountFromRequest(r *http.Request) string {
 	return ""
 }
 
+// AccountFromToken resolves the account directly from the request's session
+// cookie or bearer token, without relying on RequireAuth having run. The
+// websocket handshake is not wrapped in the auth middleware, so it uses this.
+func AccountFromToken(r *http.Request) string {
+	acc, _, err := authAccount(r)
+	if err != nil {
+		return ""
+	}
+	return acc
+}
+
 func cookieSecure() bool { return config.UITLSCert != "" }
 
 func setAuthCookies(w http.ResponseWriter, access, refresh, csrf string) {

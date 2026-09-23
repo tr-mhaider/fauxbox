@@ -21,7 +21,6 @@ import (
 	"github.com/axllent/mailpit/internal/shortuuid"
 	"github.com/axllent/mailpit/internal/tools"
 	"github.com/axllent/mailpit/server/webhook"
-	"github.com/axllent/mailpit/server/websockets"
 	"github.com/jhillyerd/enmime/v2"
 	"github.com/leporo/sqlf"
 )
@@ -178,7 +177,7 @@ func Store(ctx context.Context, body *[]byte, username *string) (string, error) 
 		c.ReplyTo = []*mail.Address{}
 	}
 
-	websockets.Broadcast("new", c)
+	broadcastScoped(ctx, "new", c)
 	webhook.Send(c)
 
 	dbLastAction = time.Now()
@@ -555,7 +554,7 @@ func MarkRead(ctx context.Context, ids []string) error {
 
 	for _, id := range toUpdate {
 		logger.Log().Debugf("[db] marked message %s as read", id)
-		websockets.Broadcast("update", struct {
+		broadcastScoped(ctx, "update", struct {
 			ID   string
 			Read bool
 		}{ID: id, Read: true})
@@ -607,7 +606,7 @@ func MarkUnread(ctx context.Context, ids []string) error {
 
 	for _, id := range toUpdate {
 		logger.Log().Debugf("[db] marked message %s as unread", id)
-		websockets.Broadcast("update", struct {
+		broadcastScoped(ctx, "update", struct {
 			ID   string
 			Read bool
 		}{ID: id, Read: false})
@@ -750,7 +749,7 @@ func DeleteMessages(ctx context.Context, ids []string) error {
 			ID string
 		}{ID: id}
 
-		websockets.Broadcast("delete", d)
+		broadcastScoped(ctx, "delete", d)
 	}
 
 	return nil
@@ -797,7 +796,7 @@ func DeleteAllMessages(ctx context.Context) error {
 
 	invalidateAllEnvelopeCache()
 
-	websockets.Broadcast("truncate", nil)
+	broadcastScoped(ctx, "truncate", nil)
 
 	return nil
 }

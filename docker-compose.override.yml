@@ -16,6 +16,9 @@ services:
       MP_API_CORS: "http://localhost:3000,http://localhost:3001"
       # Control-plane provisioning token (Phase 12), local verification only.
       MP_ADMIN_TOKEN: "local-admin-token"
+      # Dev only: the browser websocket is cross-origin (SameSite cookies not
+      # sent), so trust the ?sandbox= param. Never set this in production.
+      MP_WS_TRUST_SANDBOX_PARAM: "true"
 
   web:
     profiles: ["disabled"]

@@ -256,6 +256,12 @@ var (
 	// AdminToken is the bearer token guarding the control-plane provisioning
 	// endpoints (/api/v1/admin/*). When empty, those endpoints are disabled.
 	AdminToken string
+
+	// WSTrustSandboxParam relaxes /api/events auth to trust the ?sandbox= query
+	// param without a session cookie. It exists only for local development where
+	// the websocket is cross-origin (SameSite cookies are not sent). Never enable
+	// it in production: it lets any client watch any sandbox's events.
+	WSTrustSandboxParam = false
 )
 
 // AutoTag struct for auto-tagging
