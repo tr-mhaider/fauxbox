@@ -142,12 +142,13 @@ func Ping() error {
 	return db.Ping()
 }
 
-// StatsGet returns the total/unread statistics for a mailbox
-func StatsGet() MailboxStats {
+// StatsGet returns the total/unread statistics for a mailbox, scoped to the
+// sandbox in ctx (or global when ctx carries a bypass scope).
+func StatsGet(ctx context.Context) MailboxStats {
 	var (
-		total  = CountTotal()
-		unread = CountUnread()
-		tags   = GetAllTags(context.Background())
+		total  = CountTotal(ctx)
+		unread = CountUnread(ctx)
+		tags   = GetAllTags(ctx)
 	)
 
 	dbLastAction = time.Now()
@@ -159,39 +160,36 @@ func StatsGet() MailboxStats {
 	}
 }
 
-// CountTotal returns the number of emails in the database
-func CountTotal() uint64 {
+// countWhere runs a scoped COUNT(*) over the mailbox with an optional Read
+// filter (readFilter < 0 for all). Routing through withScope applies the same
+// per-sandbox RLS as List, so the counts match the scoped message list.
+func countWhere(ctx context.Context, readFilter int) uint64 {
 	var total float64 // use float64 for numeric scan compatibility
 
-	_ = sqlf.From(tenant("mailbox")).
-		Select("COUNT(*)").To(&total).
-		QueryRowAndClose(context.TODO(), db)
+	_ = withScope(ctx, func(ex sqlf.Executor) error {
+		q := sqlf.From(tenant("mailbox")).Select("COUNT(*)").To(&total)
+		if readFilter >= 0 {
+			q = q.Where("Read = ?", readFilter)
+		}
+		return q.QueryRowAndClose(ctx, ex)
+	})
 
 	return uint64(total)
 }
 
-// CountUnread returns the number of emails in the database that are unread.
-func CountUnread() uint64 {
-	var total float64
-
-	_ = sqlf.From(tenant("mailbox")).
-		Select("COUNT(*)").To(&total).
-		Where("Read = ?", 0).
-		QueryRowAndClose(context.TODO(), db)
-
-	return uint64(total)
+// CountTotal returns the number of emails in the sandbox (or all, when bypassed).
+func CountTotal(ctx context.Context) uint64 {
+	return countWhere(ctx, -1)
 }
 
-// CountRead returns the number of emails in the database that are read.
-func CountRead() uint64 {
-	var total float64
+// CountUnread returns the number of unread emails in the sandbox.
+func CountUnread(ctx context.Context) uint64 {
+	return countWhere(ctx, 0)
+}
 
-	_ = sqlf.From(tenant("mailbox")).
-		Select("COUNT(*)").To(&total).
-		Where("Read = ?", 1).
-		QueryRowAndClose(context.TODO(), db)
-
-	return uint64(total)
+// CountRead returns the number of read emails in the sandbox.
+func CountRead(ctx context.Context) uint64 {
+	return countWhere(ctx, 1)
 }
 
 // DbSize returns the size of the database.

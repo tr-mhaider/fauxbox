@@ -13,7 +13,7 @@ services:
       MP_MULTI_TENANT: "true"
       # Allow the host-run Next dev origin; the proxy forwards the browser's
       # Origin (:3000) while the Host becomes :8025, so it must be allowlisted.
-      MP_API_CORS: "http://localhost:3000"
+      MP_API_CORS: "http://localhost:3000,http://localhost:3001"
       # Control-plane provisioning token (Phase 12), local verification only.
       MP_ADMIN_TOKEN: "local-admin-token"
 

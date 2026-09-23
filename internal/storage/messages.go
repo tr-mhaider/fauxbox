@@ -622,7 +622,7 @@ func MarkUnread(ctx context.Context, ids []string) error {
 func MarkAllRead(ctx context.Context) error {
 	var (
 		start = time.Now()
-		total = CountUnread()
+		total = CountUnread(ctx)
 	)
 
 	if err := withScope(ctx, func(ex sqlf.Executor) error {
@@ -649,7 +649,7 @@ func MarkAllRead(ctx context.Context) error {
 func MarkAllUnread(ctx context.Context) error {
 	var (
 		start = time.Now()
-		total = CountRead()
+		total = CountRead(ctx)
 	)
 
 	if err := withScope(ctx, func(ex sqlf.Executor) error {

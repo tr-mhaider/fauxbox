@@ -132,8 +132,10 @@ func Load(detectLatestVersion bool) AppInformation {
 
 	info.Database = config.Database
 	info.DatabaseSize = storage.DbSize()
-	info.Messages = storage.CountTotal()
-	info.Unread = storage.CountUnread()
+	// Global instance stats (not per-sandbox), so use a bypass scope.
+	statsCtx := storage.WithBypass(context.Background())
+	info.Messages = storage.CountTotal(statsCtx)
+	info.Unread = storage.CountUnread(statsCtx)
 	info.Tags = storage.GetAllTagsCount(context.Background())
 
 	return info

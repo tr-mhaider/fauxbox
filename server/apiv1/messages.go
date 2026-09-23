@@ -64,7 +64,7 @@ func GetMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stats := storage.StatsGet()
+	stats := storage.StatsGet(r.Context())
 
 	var res MessagesSummary
 
@@ -236,7 +236,7 @@ func Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stats := storage.StatsGet()
+	stats := storage.StatsGet(r.Context())
 
 	var res MessagesSummary
 
