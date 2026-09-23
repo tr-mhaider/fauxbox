@@ -2,24 +2,27 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Check, ChevronsUpDown, Circle } from "lucide-react";
-import type { Sandbox } from "@/lib/sample-data";
+import type { Sandbox } from "@/lib/types";
 import { cn } from "@/lib/cn";
 
-// Framed as choosing a capture interface: mono sandbox ID + subdomain, a
-// connection dot per sandbox.
+// Choosing a capture interface: the subdomain names the sandbox, its ingest
+// host sits beneath. Selecting one re-scopes the whole inbox and the live
+// websocket subscription.
 export function SandboxSwitcher({
   sandboxes,
   activeId,
+  loading,
   onSelect,
 }: {
   sandboxes: Sandbox[];
-  activeId: string;
+  activeId: string | null;
+  loading?: boolean;
   onSelect: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const active = sandboxes.find((s) => s.id === activeId) ?? sandboxes[0];
+  const active = sandboxes.find((s) => s.id === activeId) ?? null;
 
   useEffect(() => {
     if (!open) return;
@@ -40,6 +43,22 @@ export function SandboxSwitcher({
     };
   }, [open]);
 
+  if (loading && sandboxes.length === 0) {
+    return (
+      <div className="flex h-[3.25rem] items-center rounded-md border border-border-strong bg-surface px-2.5 text-sm text-faint">
+        Loading sandboxes…
+      </div>
+    );
+  }
+
+  if (sandboxes.length === 0) {
+    return (
+      <div className="flex h-[3.25rem] items-center rounded-md border border-border-strong bg-surface px-2.5 text-sm text-faint">
+        No sandboxes
+      </div>
+    );
+  }
+
   return (
     <div ref={ref} className="relative">
       <button
@@ -50,14 +69,13 @@ export function SandboxSwitcher({
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center gap-2.5 rounded-md border border-border-strong bg-surface px-2.5 py-2 text-left transition-colors hover:bg-surface-2"
       >
-        <Circle
-          className={cn("size-2 shrink-0", active.connected ? "fill-ok text-ok" : "fill-faint text-faint")}
-          aria-hidden
-        />
+        <Circle className="size-2 shrink-0 fill-accent text-accent" aria-hidden />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium text-fg">{active.name}</span>
+          <span className="block truncate text-sm font-medium text-fg">
+            {active?.subdomain ?? "Select sandbox"}
+          </span>
           <span className="block truncate font-mono text-2xs text-faint">
-            {active.subdomain}.fauxbox.dev
+            {active ? `${active.subdomain}.fauxbox.dev` : ""}
           </span>
         </span>
         <ChevronsUpDown className="size-3.5 shrink-0 text-faint" aria-hidden />
@@ -80,12 +98,9 @@ export function SandboxSwitcher({
                 }}
                 className="flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-surface-2"
               >
-                <Circle
-                  className={cn("size-2 shrink-0", s.connected ? "fill-ok text-ok" : "fill-faint text-faint")}
-                  aria-hidden
-                />
+                <Circle className="size-2 shrink-0 fill-accent text-accent" aria-hidden />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm text-fg">{s.name}</span>
+                  <span className="block truncate text-sm text-fg">{s.subdomain}</span>
                   <span className="block truncate font-mono text-2xs text-faint">{s.id}</span>
                 </span>
                 {s.id === activeId && <Check className="size-3.5 shrink-0 text-accent" aria-hidden />}

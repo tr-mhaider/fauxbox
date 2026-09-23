@@ -1,12 +1,31 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Radio, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Field } from "@/components/ui/input";
+import { api } from "@/lib/api";
 
 export default function LoginPage() {
+  const router = useRouter();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    try {
+      await api.login(email, password);
+      router.replace("/inbox");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Sign in failed");
+      setLoading(false);
+    }
+  }
 
   return (
     <div className="grid min-h-dvh place-items-center p-6">
@@ -37,20 +56,34 @@ export default function LoginPage() {
             Access your email capture sandboxes.
           </p>
 
-          <form
-            className="mt-5 flex flex-col gap-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              setLoading(true);
-              setTimeout(() => setLoading(false), 900);
-            }}
-          >
+          <form className="mt-5 flex flex-col gap-4" onSubmit={onSubmit}>
             <Field label="Email" htmlFor="email">
-              <Input id="email" type="email" autoComplete="email" placeholder="you@company.com" required />
+              <Input
+                id="email"
+                type="email"
+                autoComplete="email"
+                placeholder="you@company.com"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
             </Field>
             <Field label="Password" htmlFor="password">
-              <Input id="password" type="password" autoComplete="current-password" placeholder="••••••••" required />
+              <Input
+                id="password"
+                type="password"
+                autoComplete="current-password"
+                placeholder="••••••••"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
             </Field>
+            {error && (
+              <p role="alert" className="text-sm text-error">
+                {error}
+              </p>
+            )}
             <Button type="submit" size="lg" loading={loading} className="mt-1 w-full">
               Sign in
               {!loading && <ArrowRight className="size-4" aria-hidden />}

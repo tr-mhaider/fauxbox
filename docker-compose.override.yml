@@ -1,0 +1,19 @@
+# Local verification override (not for production). Enables multi-tenant mode
+# on the API so the Next.js UI's auth + sandbox scoping work. The web service is
+# run on the host (npm run dev) during verification, so it's disabled here.
+services:
+  db:
+    # Host 5432 is already in use; the api reaches db over the compose network,
+    # and seeding runs via `docker compose exec db`, so no host mapping is needed.
+    ports: !reset []
+
+  api:
+    image: fauxbox-api-local
+    environment:
+      MP_MULTI_TENANT: "true"
+      # Allow the host-run Next dev origin; the proxy forwards the browser's
+      # Origin (:3000) while the Host becomes :8025, so it must be allowlisted.
+      MP_API_CORS: "http://localhost:3000"
+
+  web:
+    profiles: ["disabled"]

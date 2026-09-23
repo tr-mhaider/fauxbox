@@ -69,6 +69,26 @@ func GetAllSandboxes() ([]Sandbox, error) {
 	return out, rows.Err()
 }
 
+// SandboxesByAccount returns the sandboxes owned by an account (for the web UI
+// switcher and account screens), oldest first.
+func SandboxesByAccount(accountID string) ([]Sandbox, error) {
+	rows, err := db.Query(`SELECT `+sandboxCols+` FROM `+tenant("sandboxes")+` WHERE AccountID = $1 ORDER BY Created ASC`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := []Sandbox{}
+	for rows.Next() {
+		s, err := scanSandbox(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *s)
+	}
+	return out, rows.Err()
+}
+
 // SetSandboxSMTP sets a sandbox's SMTP username and (already-hashed) password.
 func SetSandboxSMTP(id, username, passwordHash string) error {
 	_, err := db.Exec(`UPDATE `+tenant("sandboxes")+` SET SMTPUsername = $1, SMTPPasswordHash = $2 WHERE ID = $3`, username, passwordHash, id)

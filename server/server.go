@@ -233,6 +233,7 @@ func apiRoutes() *http.ServeMux {
 	// Account management (team + API tokens) - account-scoped, no sandbox required
 	r.HandleFunc("GET "+config.Webroot+"api/v1/account/users", middleWareFunc(apiv1.RequireAccount(apiv1.ListAccountUsers)))
 	r.HandleFunc("POST "+config.Webroot+"api/v1/account/users", middleWareFunc(apiv1.RequireAccount(apiv1.CreateAccountUser)))
+	r.HandleFunc("GET "+config.Webroot+"api/v1/sandboxes", middleWareFunc(apiv1.RequireAccount(apiv1.ListSandboxes)))
 	r.HandleFunc("GET "+config.Webroot+"api/v1/account/tokens", middleWareFunc(apiv1.RequireAccount(apiv1.ListAPITokensHandler)))
 	r.HandleFunc("POST "+config.Webroot+"api/v1/account/tokens", middleWareFunc(apiv1.RequireAccount(apiv1.CreateAPITokenHandler)))
 	r.HandleFunc("DELETE "+config.Webroot+"api/v1/account/tokens/{id}", middleWareFunc(apiv1.RequireAccount(apiv1.DeleteAPITokenHandler)))
