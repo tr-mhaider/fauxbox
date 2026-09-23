@@ -420,6 +420,7 @@ func initConfigFromEnv() {
 		config.JWTSecret = os.Getenv("JWT_SECRET")
 	}
 	config.MultiTenant = getEnabledFromEnv("MP_MULTI_TENANT")
+	config.AdminToken = os.Getenv("MP_ADMIN_TOKEN")
 }
 
 // load deprecated settings from environment and warn

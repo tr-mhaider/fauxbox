@@ -252,6 +252,10 @@ var (
 	// MultiTenant enables sandbox authentication & isolation enforcement on the
 	// API. When false, the app runs single-tenant (bypass) as before.
 	MultiTenant = false
+
+	// AdminToken is the bearer token guarding the control-plane provisioning
+	// endpoints (/api/v1/admin/*). When empty, those endpoints are disabled.
+	AdminToken string
 )
 
 // AutoTag struct for auto-tagging
